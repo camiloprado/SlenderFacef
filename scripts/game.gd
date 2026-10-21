@@ -17,7 +17,7 @@ const DOCS: Array[Dictionary] = [
 	{
 		"id": NOTE_ID,
 		"title": "Bilhete de aviso",
-		"pos": Vector3(-1.24, 0.9, 9.6),
+		"pos": Vector3(-1.21, 1.53, 9.58),
 		"yaw": PI / 2.0,
 		"pinned": true,
 		"kicker": "BILHETE ENCONTRADO",
@@ -62,8 +62,8 @@ const DOCS: Array[Dictionary] = [
 		"title": "Projeto integrador",
 		"pos": Vector3(13.4, 0, -24.4),
 		"yaw": PI / 2.0,
-		"lore": "O projeto pede que todas as partes andem ao mesmo tempo. Olhar para ele não interrompe o passo. Ele continua vindo mesmo enquanto você observa.",
-		"effect": "Ele anda mesmo quando você olha para ele.",
+		"lore": "O projeto pede que todas as partes andem ao mesmo tempo. Nem a luz da lanterna interrompe o passo. Ele continua vindo mesmo enquanto você o ilumina.",
+		"effect": "Ele anda mesmo com a lanterna apontada para ele.",
 	},
 	{
 		"id": "artigo",
@@ -86,8 +86,8 @@ const DOCS: Array[Dictionary] = [
 		"title": "Colação de grau",
 		"pos": Vector3(7, 0, -58.8),
 		"yaw": 0.0,
-		"lore": "Seu nome está na lista de formandos, ao lado do dele. Depois da colação, a cerimônia não para. Olhar para ele já não interrompe os passos.",
-		"effect": "Ele não para mais quando você olha.",
+		"lore": "Seu nome está na lista de formandos, ao lado do dele. Depois da colação, a cerimônia não para. Nem a lanterna interrompe mais os passos dele.",
+		"effect": "Ele não para mais sob a luz da lanterna.",
 	},
 ]
 
@@ -97,9 +97,12 @@ var state := State.MENU
 var pages := 0
 var debug_mode := false
 var debug_god := false
+var _god_button: Button
+var _debug_hidden_by_scare := false
 
 var _player: CharacterBody3D
 var _slender: CharacterBody3D
+var _locker: Node3D
 var _grace := 8.0
 var _awake := false
 var _hang_pivot: Node3D
@@ -188,6 +191,14 @@ var _confetti: CPUParticles3D
 var _flashes: Array[OmniLight3D] = []
 var _cam_attr: CameraAttributesPractical
 var _quiet_end := false
+var _caught_scare := 0.0
+var _caught_reason := ""
+var _catcher: Node3D
+var _catcher_mouth: Node3D
+var _catcher_mouth_scale := Vector3.ONE
+var _catcher_mouth_pos := Vector3.ZERO
+var _catcher_light: OmniLight3D
+var _catch_forward := Vector3.FORWARD
 var _face_local := Vector3(3.22, 1.8, 4.28)
 const DOLLY_END := Vector3(3.08, 1.8, 3.1)
 
@@ -218,6 +229,12 @@ func _process(delta: float) -> void:
 	if state == State.CUTSCENE:
 		_update_cutscene(delta)
 		return
+	if _caught_scare > 0.0:
+		if debug_god:
+			_abort_caught_scare()
+		else:
+			_update_caught_scare(delta)
+			return
 	_sway_hanger(delta)
 	if state != State.PLAYING:
 		return
@@ -226,6 +243,12 @@ func _process(delta: float) -> void:
 		if _grace <= 0.0:
 			_slender.active = true
 			_show_hint("Ele está andando pela faculdade.")
+	if debug_god and _slender.active and not _player.hidden:
+		var close := _player.global_position.distance_to(_slender.global_position)
+		if close < _slender.catch_distance + 0.4:
+			_slender.static_level = minf(_slender.static_level, 0.15)
+			_slender._static_hold = 0.0
+			_debug_shove_mascot()
 	if _hint_timer > 0.0:
 		_hint_timer -= delta
 	else:
@@ -249,7 +272,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif state == State.ENDED and event.is_action_pressed("restart"):
 		get_tree().reload_current_scene()
 	elif state == State.PLAYING and event.is_action_pressed("debug_toggle"):
-		_set_debug(not debug_mode)
+		if not debug_mode:
+			_set_debug(true)
+		elif _debug_panel:
+			_debug_panel.visible = not _debug_panel.visible
 	elif state == State.PLAYING and event.is_action_pressed("ui_cancel"):
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -271,18 +297,39 @@ func _physics_process(_delta: float) -> void:
 		return
 	if not Input.is_action_just_pressed("interact"):
 		return
+	if _player.hidden:
+		if _locker:
+			_locker.leave(_player)
+		return
 	for node in get_tree().get_nodes_in_group("pages"):
 		if node.can_pick(_player.global_position) and _can_take(node):
 			node.pick()
 			return
+	var locker := _nearest_locker()
+	if locker:
+		_locker = locker
+		locker.enter(_player)
 
 
 func _can_take(page: Node) -> bool:
 	return _awake or page.doc_id == NOTE_ID
 
 
-func is_position_clear(pos: Vector3, _radius: float) -> bool:
-	return _walkable(pos)
+func is_position_clear(pos: Vector3, radius: float) -> bool:
+	if not _walkable(pos):
+		return false
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return true
+	var params := PhysicsShapeQueryParameters3D.new()
+	var sphere := SphereShape3D.new()
+	sphere.radius = minf(radius, 0.5)
+	params.shape = sphere
+	params.transform = Transform3D(Basis.IDENTITY, pos + Vector3(0.0, 1.0, 0.0))
+	params.collide_with_areas = false
+	if _slender:
+		params.exclude = [_slender.get_rid(), _player.get_rid()]
+	return space.intersect_shape(params, 1).is_empty()
 
 
 func _start_game(as_debug: bool) -> void:
@@ -293,7 +340,10 @@ func _start_game(as_debug: bool) -> void:
 	_menu.visible = false
 	_hud.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if not as_debug:
+		debug_god = false
 	_set_debug(as_debug)
+	_sync_god_button()
 	if as_debug:
 		_debug_note("Modo debug ligado. Esc solta o mouse.")
 	_show_hint("Entre na faculdade." if not as_debug else "Debug ativo. F3 esconde o painel.")
@@ -418,16 +468,129 @@ func _apply_doc_curse(id: String) -> void:
 
 
 func _on_caught(reason: String) -> void:
-	if debug_god and state == State.PLAYING:
+	if debug_god and state != State.CUTSCENE and state != State.ENDED:
 		_slender.active = true
-		_slender.static_level = 0.15
+		_slender.static_level = minf(_slender.static_level, 0.15)
 		_slender._static_hold = 0.0
+		if _caught_scare > 0.0:
+			_abort_caught_scare()
 		_debug_shove_mascot()
 		_debug_note("Captura ignorada: " + reason)
-		_show_hint("Debug: " + reason)
+		_show_hint("Debug: captura ignorada.")
 		return
 	_debug_note(reason)
-	_end_game(reason)
+	_start_caught_scare(reason)
+
+
+func _abort_caught_scare() -> void:
+	_caught_scare = 0.0
+	if _catcher:
+		_catcher.queue_free()
+		_catcher = null
+	_catcher_mouth = null
+	_catcher_light = null
+	if _slender:
+		_slender.visible = true
+		if state == State.PLAYING:
+			_slender.active = true
+	if _player and state == State.PLAYING:
+		_player.active = true
+		_player.camera.fov = 75.0
+		_player.camera.h_offset = 0.0
+		_player.camera.v_offset = 0.0
+	if _fade:
+		_fade.color = Color(0, 0, 0, 0)
+		_fade.visible = false
+	if _hud and state == State.PLAYING:
+		_hud.visible = true
+	if _static_mat:
+		_static_mat.set_shader_parameter("intensity", 0.0)
+	if _debug_panel and debug_mode and _debug_hidden_by_scare:
+		_debug_panel.visible = true
+	_debug_hidden_by_scare = false
+
+
+func _start_caught_scare(reason: String) -> void:
+	_caught_reason = reason
+	_caught_scare = 1.55
+	_player.active = false
+	_hud.visible = false
+	_prompt_label.text = ""
+	if _debug_panel:
+		_debug_hidden_by_scare = _debug_panel.visible
+		_debug_panel.visible = false
+	var cam: Camera3D = _player.camera
+	_catch_forward = -cam.global_basis.z
+	_catch_forward.y = 0.0
+	_catch_forward = _catch_forward.normalized() if _catch_forward.length() > 0.01 else Vector3.FORWARD
+	_slender.visible = false
+	_catcher = _slender.get_node("Mascot").duplicate() as Node3D
+	_catcher.name = "CatchScare"
+	add_child(_catcher)
+	_catcher.pose_standing()
+	_catcher_mouth = _catcher.find_child("Mouth", true, false) as Node3D
+	if _catcher_mouth:
+		_catcher_mouth_scale = _catcher_mouth.scale
+		_catcher_mouth_pos = _catcher_mouth.position
+	_catcher_light = OmniLight3D.new()
+	_catcher_light.position = Vector3(0.0, 1.8, 0.9)
+	_catcher_light.omni_range = 3.2
+	_catcher_light.light_color = Color(0.45, 0.85, 0.55)
+	_catcher.add_child(_catcher_light)
+	_fade.visible = true
+	_apply_caught_scare()
+
+
+func _place_catcher(distance: float, drop: float, tilt: float) -> void:
+	var cam: Camera3D = _player.camera
+	var side := _catch_forward.cross(Vector3.UP)
+	var base: Vector3 = cam.global_position + _catch_forward * distance + side * 0.14
+	base.y = cam.global_position.y - 1.8 - drop
+	_catcher.global_position = base
+	_catcher.rotation = Vector3(tilt, atan2(-_catch_forward.x, -_catch_forward.z), 0.0)
+
+
+func _update_caught_scare(delta: float) -> void:
+	_caught_scare -= delta
+	if _caught_scare > 0.0:
+		_apply_caught_scare()
+		return
+	_caught_scare = 0.0
+	_player.camera.h_offset = 0.0
+	_player.camera.v_offset = 0.0
+	_fade.color = Color(0, 0, 0, 1)
+	_end_game(_caught_reason)
+	var layer := _fade.get_parent()
+	layer.move_child(_end_panel, layer.get_child_count() - 1)
+
+
+func _apply_caught_scare() -> void:
+	var cam: Camera3D = _player.camera
+	cam.h_offset = 0.0
+	cam.v_offset = 0.0
+	if _caught_scare > 1.32:
+		_place_catcher(1.52, 0.0, 0.0)
+		cam.fov = 30.0
+		cam.look_at(_catcher.to_global(Vector3(0.0, 1.8, 0.34)), Vector3.UP)
+		_fade.color = Color(0, 0, 0, 0.2)
+		_static_mat.set_shader_parameter("intensity", 0.0)
+		_catcher_light.light_energy = 2.5
+		return
+	if _caught_scare > 0.78:
+		_place_catcher(0.98, 0.06, 0.12)
+		if _catcher_mouth:
+			_catcher_mouth.scale = _catcher_mouth_scale * Vector3(1.3, 2.7, 1.4)
+			_catcher_mouth.position = _catcher_mouth_pos + Vector3(0.0, -0.1, -0.01)
+		cam.fov = 62.0
+		cam.look_at(_catcher.to_global(Vector3(-0.02, 1.62, 0.44)), Vector3.UP)
+		cam.h_offset = randf_range(-0.04, 0.04)
+		cam.v_offset = randf_range(-0.03, 0.03)
+		_static_mat.set_shader_parameter("intensity", 0.58)
+		_fade.color = Color(0.45, 0.02, 0.03, 0.18)
+		_catcher_light.light_energy = 7.0
+		return
+	_fade.color = Color(0, 0, 0, 1)
+	_static_mat.set_shader_parameter("intensity", 0.0)
 
 
 func _end_game(message: String) -> void:
@@ -953,6 +1116,9 @@ func _show_hint(text: String) -> void:
 
 
 func _update_prompt() -> void:
+	if _player.hidden:
+		_prompt_label.text = "E  —  Sair do armário"
+		return
 	var prompt := ""
 	for node in get_tree().get_nodes_in_group("pages"):
 		if node.can_pick(_player.global_position):
@@ -961,7 +1127,22 @@ func _update_prompt() -> void:
 			else:
 				prompt = "Leia primeiro o bilhete preso na fantasia da entrada."
 			break
+	if prompt == "" and _nearest_locker():
+		prompt = "E  —  Entrar no armário"
 	_prompt_label.text = prompt
+
+
+func _nearest_locker() -> Node:
+	var best: Node = null
+	var best_dist := 1.45
+	for node in get_tree().get_nodes_in_group("lockers"):
+		if not node.can_enter(_player.global_position):
+			continue
+		var dist: float = node.to_global(Vector3(0.0, 0.1, 0.75)).distance_to(_player.global_position)
+		if dist < best_dist:
+			best_dist = dist
+			best = node
+	return best
 
 
 func _refresh_list() -> void:
@@ -1454,48 +1635,67 @@ func _fit_pixel_size(text: String, font_size: int, max_width: float, max_height:
 
 func _add_furniture() -> void:
 	for x in [-14.0, -11.0, -8.0, -5.0]:
-		_box(self, Vector3(0.7, 1.8, 2.2), Vector3(x, 0.9, -10.7), Color(0.18, 0.12, 0.08))
+		_solid(self, Vector3(0.7, 1.8, 2.2), Vector3(x, 0.9, -10.7), Color(0.18, 0.12, 0.08))
 	for i in 3:
-		_box(self, Vector3(1.2, 0.75, 0.7), Vector3(-12.5 + float(i) * 2.2, 0.38, 6.5), Color(0.3, 0.22, 0.14))
-		_box(self, Vector3(1.2, 0.75, 0.7), Vector3(-12.5 + float(i) * 2.2, 0.38, 9.2), Color(0.3, 0.22, 0.14))
-	_box(self, Vector3(3.2, 1.05, 0.6), Vector3(10.5, 0.52, -11.0), Color(0.28, 0.22, 0.16))
-	_box(self, Vector3(1.6, 0.78, 0.8), Vector3(12.5, 0.39, 9.5), Color(0.32, 0.2, 0.12))
+		_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(-12.5 + float(i) * 2.2, 0.38, 6.5), Color(0.3, 0.22, 0.14))
+		_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(-12.5 + float(i) * 2.2, 0.38, 9.2), Color(0.3, 0.22, 0.14))
+	_solid(self, Vector3(3.2, 1.05, 0.6), Vector3(10.5, 0.52, -11.0), Color(0.28, 0.22, 0.16))
+	_solid(self, Vector3(1.6, 0.78, 0.8), Vector3(12.5, 0.39, 9.5), Color(0.32, 0.2, 0.12))
 
 	var seat := Color(0.3, 0.08, 0.08)
 	var wood := Color(0.3, 0.22, 0.14)
 	var b := BLOCKS[1]
 	for row in 4:
 		var rz := b - 5.0 - float(row) * 1.4
-		_box(self, Vector3(1.8, 0.55, 0.5), Vector3(-13.3, 0.28, rz), seat)
-		_box(self, Vector3(4.6, 0.55, 0.5), Vector3(-7.3, 0.28, rz), seat)
-	_box(self, Vector3(8.0, 0.4, 1.4), Vector3(-9.0, 0.2, b - 11.2), Color(0.2, 0.13, 0.08))
+		_solid(self, Vector3(1.8, 0.55, 0.5), Vector3(-13.3, 0.28, rz), seat)
+		_solid(self, Vector3(4.6, 0.55, 0.5), Vector3(-7.3, 0.28, rz), seat)
+	_solid(self, Vector3(8.0, 0.4, 1.4), Vector3(-9.0, 0.2, b - 11.2), Color(0.2, 0.13, 0.08))
 	for tx in [5.5, 8.0, 14.0]:
 		for tz in [b - 5.0, b - 9.5]:
-			_box(self, Vector3(1.4, 0.75, 0.9), Vector3(tx, 0.38, tz), wood)
-	_box(self, Vector3(4.5, 1.05, 0.6), Vector3(10.5, 0.52, b - 11.3), Color(0.5, 0.5, 0.52))
+			_solid(self, Vector3(1.4, 0.75, 0.9), Vector3(tx, 0.38, tz), wood)
+	_solid(self, Vector3(4.5, 1.05, 0.6), Vector3(10.5, 0.52, b - 11.3), Color(0.5, 0.5, 0.52))
 
 	for c: float in [BLOCKS[1], BLOCKS[2]]:
 		for sx in [-1.0, 1.0]:
 			for i in 3:
 				var dx: float = sx * (8.1 + float(i) * 2.2)
-				_box(self, Vector3(1.2, 0.75, 0.7), Vector3(dx, 0.38, c + 6.5), wood)
-				_box(self, Vector3(1.2, 0.75, 0.7), Vector3(dx, 0.38, c + 9.2), wood)
-			_box(self, Vector3(3.0, 1.0, 0.1), Vector3(sx * 10.3, 1.6, c + 11.9), Color(0.08, 0.16, 0.1))
+				_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(dx, 0.38, c + 6.5), wood)
+				_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(dx, 0.38, c + 9.2), wood)
+			_solid(self, Vector3(3.0, 1.0, 0.1), Vector3(sx * 10.3, 1.6, c + 11.9), Color(0.08, 0.16, 0.1))
 
 	var a := BLOCKS[2]
 	var steel := Color(0.3, 0.32, 0.34)
 	for sz in [a - 5.0, a - 10.8]:
-		_box(self, Vector3(3.0, 2.0, 0.6), Vector3(-13.6, 1.0, sz), steel)
-		_box(self, Vector3(3.0, 2.0, 0.6), Vector3(-6.6, 1.0, sz), steel)
-	_box(self, Vector3(2.8, 0.8, 1.2), Vector3(10.5, 0.4, a - 8.5), Color(0.24, 0.13, 0.07))
+		_solid(self, Vector3(3.0, 2.0, 0.6), Vector3(-13.6, 1.0, sz), steel)
+		_solid(self, Vector3(3.0, 2.0, 0.6), Vector3(-6.6, 1.0, sz), steel)
+	_solid(self, Vector3(2.8, 0.8, 1.2), Vector3(10.5, 0.4, a - 8.5), Color(0.24, 0.13, 0.07))
 	for cx in [9.6, 11.4]:
-		_box(self, Vector3(0.7, 0.9, 0.7), Vector3(cx, 0.45, a - 10.0), Color(0.12, 0.06, 0.05))
+		_solid(self, Vector3(0.7, 0.9, 0.7), Vector3(cx, 0.45, a - 10.0), Color(0.12, 0.06, 0.05))
 
 	var locker := Color(0.17, 0.24, 0.3)
 	for c: float in BLOCKS:
 		for sx in [-1.0, 1.0]:
 			for sz in [-7.0, 7.0]:
-				_box(self, Vector3(0.5, 1.9, 5.0), Vector3(sx * (OUTER_X - 0.45), 0.95, c + sz), locker)
+				_solid(self, Vector3(0.5, 1.9, 5.0), Vector3(sx * (OUTER_X - 0.45), 0.95, c + sz), locker)
+	_add_lockers()
+
+
+func _add_lockers() -> void:
+	var script := load("res://scripts/locker.gd")
+	var spots: Array = [
+		[Vector3(-15.45, 0.0, -6.4), PI / 2.0],
+		[Vector3(15.45, 0.0, 5.6), -PI / 2.0],
+		[Vector3(15.45, 0.0, -27.8), -PI / 2.0],
+		[Vector3(-15.45, 0.0, -19.2), PI / 2.0],
+		[Vector3(15.45, 0.0, -54.2), -PI / 2.0],
+		[Vector3(-15.45, 0.0, -43.2), PI / 2.0],
+	]
+	for spot in spots:
+		var locker := Node3D.new()
+		locker.set_script(script)
+		locker.position = spot[0]
+		locker.rotation.y = spot[1]
+		add_child(locker)
 
 
 func _add_school_lights() -> void:
@@ -1564,10 +1764,16 @@ func _build_pages() -> void:
 		page.doc_id = doc.id
 		page.doc_title = doc.title
 		page.pinned = doc.get("pinned", false)
-		page.position = doc.pos
-		page.rotation.y = doc.yaw
 		page.picked_up.connect(_on_page_picked)
-		add_child(page)
+		var chest := _hang_costume.get_node_or_null("Body/Book1") if page.pinned else null
+		if chest:
+			chest.add_child(page)
+			page.position = Vector3(0.0, 0.1, 0.4)
+			page.rotation = Vector3.ZERO
+		else:
+			page.position = doc.pos
+			page.rotation.y = doc.yaw
+			add_child(page)
 
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
@@ -1673,6 +1879,11 @@ func _pump_audio() -> void:
 		if state == State.ENDED:
 			playback.push_frame(Vector2.ZERO)
 			continue
+		if _caught_scare > 0.0:
+			_music_t += 1.0 / MIX_RATE
+			var shriek := _scream_sample() if _caught_scare > 0.78 and _caught_scare <= 1.32 else 0.0
+			playback.push_frame(Vector2(shriek, shriek))
+			continue
 		if cheerful or ceremony:
 			_music_t += 1.0 / MIX_RATE
 			var sample := _cheerful_sample() if cheerful else _ceremony_sample()
@@ -1719,15 +1930,19 @@ func _cheerful_sample() -> float:
 	return (mel * 0.34 + fifth * 0.12 + bass * 0.3) * pluck * 0.9
 
 
+func _scream_sample() -> float:
+	var scream := sin(TAU * 940.0 * _music_t) * 0.28
+	scream += sin(TAU * 70.0 * _music_t) * 0.22
+	scream += randf_range(-1.0, 1.0) * 0.34
+	return scream
+
+
 func _ceremony_sample() -> float:
 	if state == State.ENDED or (_scare > 0.0 and (_scare > 1.32 or _scare <= 0.78)):
 		return 0.0
 	var t := _cut_t
 	if _scare > 0.78:
-		var scream := sin(TAU * 940.0 * _music_t) * 0.28
-		scream += sin(TAU * 70.0 * _music_t) * 0.22
-		scream += randf_range(-1.0, 1.0) * 0.34
-		return scream
+		return _scream_sample()
 	var noise := randf_range(-1.0, 1.0)
 	_cer_hi += (noise - _cer_hi) * 0.45
 	_cer_lo += (noise - _cer_lo) * 0.06
@@ -1888,7 +2103,7 @@ func _build_menu(layer: CanvasLayer) -> void:
 	quit.name = "BtnQuit"
 	quit.pressed.connect(func() -> void: get_tree().quit())
 	column.add_child(quit)
-	_menu_title(column, "WASD para andar    Mouse para olhar\nShift para correr    F para a lanterna    E para pegar\nEsc solta o mouse    F3 abre o modo debug", 15, Color(0.35, 0.4, 0.5))
+	_menu_title(column, "WASD para andar    Mouse para olhar\nShift para correr    F para a lanterna    E para pegar ou se esconder\nEsc solta o mouse    F3 abre o modo debug", 15, Color(0.35, 0.4, 0.5))
 
 
 func _build_end_panel(layer: CanvasLayer) -> void:
@@ -2110,7 +2325,7 @@ func _build_debug_panel(layer: CanvasLayer) -> void:
 	_debug_action(grid, "Acordar", _debug_wake)
 	_debug_action(grid, "Congelar", _debug_freeze)
 	_debug_action(grid, "Lanterna", _debug_refill_light)
-	_debug_action(grid, "Modo deus", _debug_toggle_god)
+	_god_button = _debug_action(grid, "Deus: desligado", _debug_toggle_god)
 	_debug_action(grid, "Ir até ele", _debug_face_mascot)
 
 
@@ -2118,8 +2333,6 @@ func _set_debug(enabled: bool) -> void:
 	debug_mode = enabled
 	if _debug_panel:
 		_debug_panel.visible = enabled and state == State.PLAYING
-	if not enabled:
-		debug_god = false
 
 
 func _refresh_debug() -> void:
@@ -2127,8 +2340,10 @@ func _refresh_debug() -> void:
 		return
 	var dist := _player.global_position.distance_to(_slender.global_position)
 	var looking := false
+	var lit := false
 	if _slender.has_method("_player_is_looking"):
 		looking = _slender._player_is_looking()
+		lit = _slender._in_flashlight()
 	_debug_stats.text = "\n".join([
 		"FPS  %d" % Engine.get_frames_per_second(),
 		"Você  " + _fmt_vec(_player.global_position),
@@ -2136,7 +2351,7 @@ func _refresh_debug() -> void:
 		"Distância  %.1f m" % dist,
 		"Estático  %.0f%%" % (_slender.static_level * 100.0),
 		"Agressão  %.0f%%     Graça  %.1f s" % [_slender.aggression * 100.0, _grace],
-		"Olhando  %s" % ("sim" if looking else "não"),
+		"Olhando  %s     Na luz  %s" % ["sim" if looking else "não", "sim" if lit else "não"],
 		"Ativo  %s     Deus  %s" % ["sim" if _slender.active else "não", "sim" if debug_god else "não"],
 		"Lanterna  %s  %d%%" % ["ligada" if _player.flashlight_on else "desligada", int(_player.battery)],
 		"Documentos  %d / 8" % pages,
@@ -2187,7 +2402,15 @@ func _debug_refill_light() -> void:
 
 func _debug_toggle_god() -> void:
 	debug_god = not debug_god
+	if debug_god and _caught_scare > 0.0:
+		_abort_caught_scare()
+	_sync_god_button()
 	_debug_note("Modo deus " + ("ligado" if debug_god else "desligado"))
+
+
+func _sync_god_button() -> void:
+	if _god_button:
+		_god_button.text = "Deus: " + ("ligado" if debug_god else "desligado")
 
 
 func _debug_face_mascot() -> void:
@@ -2203,13 +2426,16 @@ func _debug_face_mascot() -> void:
 
 func _debug_shove_mascot() -> void:
 	var origin := _player.global_position
-	for ang in [PI, PI * 0.5, -PI * 0.5, 0.0]:
-		var pos := origin + Vector3(sin(ang), 0.0, cos(ang)) * 7.0
-		pos.y = 0.1
-		if _walkable(pos):
-			_slender.global_position = pos
-			_slender.velocity = Vector3.ZERO
-			return
+	var reaches: Array[float] = [8.0, 5.0, 3.2]
+	var angles: Array[float] = [PI, PI * 0.5, -PI * 0.5, 0.0, PI * 0.25, -PI * 0.25]
+	for reach in reaches:
+		for ang in angles:
+			var pos := origin + Vector3(sin(ang), 0.0, cos(ang)) * reach
+			pos.y = 0.1
+			if _walkable(pos) and pos.distance_to(origin) > _slender.catch_distance + 0.8:
+				_slender.global_position = pos
+				_slender.velocity = Vector3.ZERO
+				return
 
 
 func _fmt_vec(v: Vector3) -> String:
@@ -2272,25 +2498,42 @@ func _menu_button(text: String, accent: Color) -> Button:
 	return button
 
 
-func _debug_action(parent: GridContainer, text: String, callback: Callable) -> void:
+func _debug_action(parent: GridContainer, text: String, callback: Callable) -> Button:
 	var button := _menu_button(text, Color(0.45, 0.72, 0.78))
 	button.custom_minimum_size = Vector2(140, 32)
 	button.add_theme_font_size_override("font_size", 13)
 	button.pressed.connect(callback)
 	parent.add_child(button)
+	return button
 
 
-func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> void:
+func _solid(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> void:
+	_box(parent, size, pos, color, true)
+
+
+func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, solid := false) -> void:
 	var mesh := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = size
 	mesh.mesh = box
-	mesh.position = pos
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.roughness = 0.92
 	mesh.material_override = mat
-	parent.add_child(mesh)
+	var holder: Node3D = mesh
+	if solid:
+		var body := StaticBody3D.new()
+		body.position = pos
+		parent.add_child(body)
+		body.add_child(mesh)
+		var shape := CollisionShape3D.new()
+		var col := BoxShape3D.new()
+		col.size = size
+		shape.shape = col
+		body.add_child(shape)
+		return
+	mesh.position = pos
+	parent.add_child(holder)
 
 
 func _ensure_actions() -> void:

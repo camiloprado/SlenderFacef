@@ -7,6 +7,8 @@ const BATTERY_DRAIN := 2.4
 const BATTERY_RECHARGE := 6.0
 
 var active := false
+var hidden := false
+var hide_grace := 0.0
 var sprinting := false
 var flashlight_on := true
 var battery := 100.0
@@ -54,6 +56,7 @@ func _build() -> void:
 	light.spot_attenuation = 0.7
 	light.shadow_enabled = true
 	light.shadow_bias = 0.05
+	light.position = Vector3(0.22, -0.18, 0.0)
 	camera.add_child(light)
 
 
@@ -80,8 +83,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if not active:
+	if hide_grace > 0.0:
+		hide_grace = maxf(hide_grace - delta, 0.0)
+	if not active or hidden:
 		velocity = Vector3.ZERO
+		if hidden:
+			_update_flashlight(delta)
 		return
 
 	var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -122,6 +129,7 @@ func _update_flashlight(delta: float) -> void:
 	elif not flashlight_on:
 		battery = minf(battery + BATTERY_RECHARGE * delta, 100.0)
 
+	light.position.x = 0.0 if hidden else 0.22
 	var energy := 0.0
 	if flashlight_on and battery > 0.0:
 		energy = 7.5

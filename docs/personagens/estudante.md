@@ -23,7 +23,7 @@ caderno que ele segura ao pegar um documento.
 | Mouse | Olhar |
 | Shift | Correr |
 | F | Lanterna |
-| E | Pegar documento |
+| E | Pegar documento, ou entrar e sair de um armário |
 | Esc | Soltar o mouse |
 | F3 | Painel de debug |
 
@@ -31,6 +31,7 @@ caderno que ele segura ao pegar um documento.
 
 - Lanterna com bateria; recarrega quando desligada.
 - Ao pegar um documento, o caderno vem até a câmera e abre.
+- Armários nas salas: E entra, a porta fecha, e o mascote não alcança enquanto se está dentro. E sai.
 
 ## Arquivos
 

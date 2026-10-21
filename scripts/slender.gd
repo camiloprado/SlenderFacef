@@ -83,7 +83,7 @@ func _physics_process(delta: float) -> void:
 	if breath:
 		breath.volume_db = lerpf(-10.0, 2.0, aggression)
 
-	var staring := looking and dist < 30.0
+	var staring := _in_flashlight()
 	if Vector2(_player.velocity.x, _player.velocity.z).length() < 0.4:
 		_player_idle += delta
 	else:
@@ -121,9 +121,13 @@ func _physics_process(delta: float) -> void:
 		_stride = 0.0
 		_play_step()
 
-	if dist < catch_distance:
+	var safe: bool = _player.hidden or _player.hide_grace > 0.0 or _god_mode()
+	if _god_mode():
+		static_level = minf(static_level, 0.2)
+		_static_hold = 0.0
+	elif dist < catch_distance and not safe:
 		_catch("O mascote alcançou você.")
-	elif static_level >= 0.99:
+	elif static_level >= 0.99 and not safe:
 		_static_hold += delta
 		if _static_hold > 0.4:
 			_catch("A estática consumiu você.")
@@ -131,8 +135,13 @@ func _physics_process(delta: float) -> void:
 		_static_hold = maxf(_static_hold - delta, 0.0)
 
 
+func _god_mode() -> bool:
+	var game := get_parent()
+	return game != null and bool(game.get("debug_god"))
+
+
 func _catch(reason: String) -> void:
-	if not active:
+	if not active or _god_mode():
 		return
 	active = false
 	velocity = Vector3.ZERO
@@ -298,15 +307,26 @@ func _destination_clear(pos: Vector3) -> bool:
 
 
 func _player_is_looking() -> bool:
+	return _visible_from(_player.get_camera(), 28.0, 0.62)
+
+
+func _in_flashlight() -> bool:
+	if not _player.flashlight_on or _player.battery <= 0.0:
+		return false
+	var light: SpotLight3D = _player.light
+	return _visible_from(light, light.spot_range, cos(deg_to_rad(light.spot_angle + 6.0)))
+
+
+func _visible_from(eye: Node3D, reach: float, min_facing: float) -> bool:
 	var cam: Camera3D = _player.get_camera()
 	var target := global_position + Vector3(0.0, 1.55, 0.0)
-	var to := target - cam.global_position
+	var to := target - eye.global_position
 	var dist := to.length()
-	if dist > 28.0 or dist < 0.05:
+	if dist > reach or dist < 0.05:
 		return false
 	var dir := to / dist
 	var facing := (-cam.global_transform.basis.z).dot(dir)
-	if facing < 0.62:
+	if facing < min_facing:
 		return false
 	var space := get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(cam.global_position, target)

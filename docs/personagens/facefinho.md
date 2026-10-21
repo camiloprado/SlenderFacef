@@ -35,12 +35,16 @@ Fotos de referência: `docs/arte/facefinho/referencias/`.
 
 - Fica pendurado e inativo até o jogador ler o bilhete de aviso.
 - Quando o bilhete é guardado, a fantasia some do cabide e ele começa no corredor central do Bloco C, no fundo da escola.
-- Congela quando o jogador olha para ele, até 28 m.
+- Só congela quando está dentro do facho da lanterna ligada (até 24 m). Olhar no
+  escuro não o para; apenas a estática sobe.
 - Faz barulho: passos abafados de pelúcia com rangido de tênis (ouvidos até 30 m),
   respiração rouca em loop (até 13 m) e um vulto ao teletransportar.
 - Quando está perto e fora da visão, a tela ganha uma borda vermelha que pulsa com
   o coração, o batimento acelera e um zumbido agudo sobe.
 - A estática só sobe quando ele está na visão do jogador, mais forte de perto.
+- Quando alcança o jogador, faz o mesmo susto do fim da colação: aparece parado
+  na frente da câmera, avança com a boca escancarada, a tela treme com estática,
+  luz verde e um grito, e então corta para preto e para a tela de fim.
 - Cada documento acadêmico muda uma regra dele.
 - **Estágio obrigatório:** ele passa a seguir o jogador de perto, sempre atrás,
   mantendo uns 4 m de distância (menos conforme a agressividade sobe). Não mata
