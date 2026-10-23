@@ -13,6 +13,7 @@ const BOOKS := [
 
 var eye_material: ShaderMaterial
 var _phase := 0.0
+var _reach := 0.0
 var _meshes := {}
 
 
@@ -59,6 +60,17 @@ func pose_hanging() -> void:
 		(get_node("Leg" + side + "/Foot") as Node3D).rotation = Vector3(0.75, sign * 0.2, 0.0)
 
 
+func set_reach(weight: float) -> void:
+	_reach = clampf(weight, 0.0, 1.0)
+	for side in ["L", "R"]:
+		var sign := -1.0 if side == "L" else 1.0
+		var arm := get_node("Body/Arm" + side) as Node3D
+		var hang := Vector3(0.0, 0.0, sign * 0.38)
+		var up := Vector3(PI, 0.0, sign * 0.05)
+		arm.rotation = hang.lerp(up, _reach)
+		arm.scale = Vector3.ONE.lerp(Vector3(0.9, 2.0, 0.9), _reach)
+
+
 func walk(delta: float, speed: float) -> void:
 	if speed < 0.2:
 		return
@@ -66,8 +78,9 @@ func walk(delta: float, speed: float) -> void:
 	var swing := sin(_phase)
 	(get_node("LegL") as Node3D).rotation.x = swing * 0.42
 	(get_node("LegR") as Node3D).rotation.x = -swing * 0.42
-	(get_node("Body/ArmL") as Node3D).rotation.x = -swing * 0.3
-	(get_node("Body/ArmR") as Node3D).rotation.x = swing * 0.3
+	if _reach <= 0.01:
+		(get_node("Body/ArmL") as Node3D).rotation.x = -swing * 0.3
+		(get_node("Body/ArmR") as Node3D).rotation.x = swing * 0.3
 	var body := get_node("Body") as Node3D
 	body.position.y = absf(cos(_phase)) * 0.035
 	body.rotation.z = swing * 0.035

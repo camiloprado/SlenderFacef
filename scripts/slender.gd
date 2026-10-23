@@ -9,18 +9,44 @@ var held := false
 var watch_behind := false
 var relentless := false
 var speed_scale := 1.0
-var blink_scale := 1.0
-var blink_closer := 1.0
+var sense_scale := 1.0
 var move_while_watched := 0.0
 var static_scale := 1.0
 var catch_distance := 1.45
+var mind := "rondando"
+var venting := false
 
 var presence := 0.0
 var behind := 0.0
 
 var _player: CharacterBody3D
-var _teleport_timer := 4.0
 var _static_hold := 0.0
+var _known := Vector3.ZERO
+var _known_valid := false
+var _seen := 0.0
+var _mode := "patrol"
+var _search_point := Vector3.ZERO
+var _search_time := 0.0
+var _patrol_i := 0
+var _patrol_ready := false
+var _sees := false
+var _hears := false
+var _vent_phase := ""
+var _vent_time := 0.0
+var _vent_lockout := 0.0
+var _vent_entry: Node3D
+var _vent_exit: Node3D
+var _vent_path := PackedVector3Array()
+var _vent_cursor := 0
+var _vent_from := Vector3.ZERO
+var _vent_stuck := 0.0
+var _vent_best := 9999.0
+var _patrol: Array[Vector3] = [
+	Vector3(0.0, 0.1, -52.0),
+	Vector3(0.0, 0.1, -32.0),
+	Vector3(0.0, 0.1, -12.0),
+	Vector3(0.0, 0.1, 4.0),
+]
 var _eye_mat: ShaderMaterial
 var _costume: Node3D
 var _stride := 0.0
@@ -52,8 +78,7 @@ func apply_curse(id: String) -> void:
 		"estagio":
 			watch_behind = true
 		"relatorio":
-			blink_scale += 0.95
-			blink_closer = minf(blink_closer, 0.62)
+			sense_scale += 0.7
 		"integrador":
 			move_while_watched = maxf(move_while_watched, 0.5)
 		"artigo":
@@ -88,13 +113,25 @@ func _physics_process(delta: float) -> void:
 		_player_idle += delta
 	else:
 		_player_idle = 0.0
-	if watch_behind and (not staring or relentless) and _is_in_front() and not _hunting():
-		_teleport_timer = minf(_teleport_timer, 0.6)
-	var speed := lerpf(2.1, 6.4, aggression) * speed_scale
-	if _player.sprinting:
-		speed *= 1.15
+	_update_mind(delta)
+	if _vent_lockout > 0.0:
+		_vent_lockout = maxf(_vent_lockout - delta, 0.0)
+	if not venting:
+		_try_vent()
+	if venting:
+		_update_vent(delta)
+		if venting:
+			if _god_mode():
+				static_level = minf(static_level, 0.2)
+				_static_hold = 0.0
+			return
+	var speed := _pace(dist)
+	if _hears and _player.sprinting:
+		speed *= 1.1
 	if staring and not relentless:
 		speed *= move_while_watched
+	if watch_behind and not _hunting() and _is_in_front() and (not staring or relentless):
+		speed = maxf(speed, lerpf(3.6, 5.4, aggression) * speed_scale)
 	var dir := _chase_direction()
 	if speed <= 0.05 or dir == Vector3.ZERO:
 		velocity.x = move_toward(velocity.x, 0.0, delta * 24.0)
@@ -102,18 +139,14 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.x = dir.x * speed
 		velocity.z = dir.z * speed
-	if not staring or relentless:
-		_teleport_timer -= delta * (1.35 if _player.sprinting else 1.0) * blink_scale
-		if _teleport_timer <= 0.0:
-			_teleport_timer = lerpf(6.2, 1.9, aggression) / blink_scale
-			_blink_closer()
+	_describe(speed, staring)
 
 	if not is_on_floor():
 		velocity.y -= 22.0 * delta
 	else:
 		velocity.y = -0.2
 	move_and_slide()
-	_face_player()
+	_face_along(dir, staring)
 	var moved := Vector2(velocity.x, velocity.z).length()
 	_costume.walk(delta, moved)
 	_stride += moved * delta
@@ -212,17 +245,286 @@ func _follow_distance() -> float:
 	return catch_distance + lerpf(4.0, 2.6, aggression)
 
 
+func hear(at: Vector3) -> void:
+	_known = at
+	_known.y = 0.1
+	_known_valid = true
+	_mode = "hunt"
+	_search_time = 0.0
+
+
+func _update_mind(delta: float) -> void:
+	if not _patrol_ready:
+		_patrol_ready = true
+		_patrol_i = _nearest_patrol()
+	_sees = _can_see_player()
+	var hear_reach := _hearing_range()
+	var muffled: bool = _player.hidden and bool(_player.get("holding_breath"))
+	_hears = not muffled and hear_reach > 0.4 and _flat_distance() <= hear_reach
+	if _sees:
+		_seen = 2.4
+		_mark(_player.global_position)
+		_mode = "hunt"
+	elif _hears:
+		_mark(_player.global_position)
+		_mode = "hunt"
+		_seen = maxf(_seen - delta, 0.0)
+	else:
+		_seen = maxf(_seen - delta, 0.0)
+	if _mode == "hunt" and _seen <= 0.0 and _known_valid and _arrived(_known):
+		_mode = "search"
+		_search_time = 0.0
+		_search_point = _pick_around(_known, 5.0)
+	if _mode == "search":
+		_search_time += delta
+		if _arrived(_search_point):
+			var radius := lerpf(4.0, 9.0, clampf(_search_time / 8.0, 0.0, 1.0))
+			_search_point = _pick_around(_known, radius)
+		if _search_time > 9.5:
+			_mode = "patrol"
+			_patrol_i = _nearest_patrol()
+	elif _mode == "patrol" and _arrived(_patrol[_patrol_i]):
+		_patrol_i = (_patrol_i + 1) % _patrol.size()
+
+
+func _try_vent() -> void:
+	if _vent_lockout > 0.0 or _sees or get_parent() == null:
+		return
+	var game := get_parent()
+	if not game.has_method("vent_shortcut"):
+		return
+	var route: Dictionary = game.vent_shortcut(global_position, _goal_position(), _player.global_position)
+	if route.is_empty():
+		return
+	venting = true
+	_vent_phase = "approach"
+	_vent_time = 0.0
+	_vent_entry = route["entry"]
+	_vent_exit = route["exit"]
+	_vent_path = route["path"]
+	_vent_cursor = 0
+	_vent_stuck = 0.0
+	_vent_best = 9999.0
+	mind = "no duto"
+
+
+func _update_vent(delta: float) -> void:
+	mind = "no duto"
+	if _vent_entry == null or _vent_exit == null:
+		venting = false
+		return
+	if _vent_phase == "approach":
+		if _sees:
+			venting = false
+			_vent_lockout = 1.5
+			return
+		var stand: Vector3 = _vent_entry.stand_global()
+		var gap := _flat_to(stand)
+		if gap < 0.85:
+			velocity = Vector3.ZERO
+			_face_point(_vent_entry.inside_global())
+			_vent_phase = "reach"
+			_vent_time = 0.0
+			_vent_stuck = 0.0
+		else:
+			if gap < _vent_best - 0.15:
+				_vent_best = gap
+				_vent_stuck = 0.0
+			else:
+				_vent_stuck += delta
+			if _vent_stuck > 1.4:
+				venting = false
+				_vent_lockout = 2.0
+				_costume.set_reach(0.0)
+				return
+			_step_toward(stand, _pace(_flat_distance()), delta)
+		return
+	if _vent_phase == "reach":
+		velocity = Vector3.ZERO
+		_vent_time += delta
+		_costume.set_reach(clampf(_vent_time / 0.55, 0.0, 1.0))
+		if _vent_time >= 0.55:
+			_vent_phase = "open"
+			_vent_time = 0.0
+			_vent_entry.open_grate()
+		return
+	if _vent_phase == "open":
+		_vent_time += delta
+		if _vent_time >= 0.35:
+			_vent_phase = "climb"
+			_vent_time = 0.0
+			_vent_from = global_position
+			_set_body_collision(true)
+		return
+	if _vent_phase == "climb":
+		_vent_time += delta
+		var climb := clampf(_vent_time / 0.45, 0.0, 1.0)
+		global_position = _vent_from.lerp(_vent_entry.inside_global(), climb)
+		_costume.set_reach(1.0 - climb)
+		if climb >= 1.0:
+			_vent_entry.close_grate()
+			visible = false
+			_vent_phase = "ride"
+			_vent_cursor = 0
+			if not _vent_path.is_empty():
+				global_position = _vent_path[0]
+		return
+	if _vent_phase == "ride":
+		if _ride_path(delta):
+			_vent_phase = "exit"
+			_vent_time = 0.0
+			visible = true
+			global_position = _vent_exit.inside_global()
+			_costume.set_reach(1.0)
+			_vent_exit.open_grate()
+		return
+	if _vent_phase == "exit":
+		_vent_time += delta
+		if _vent_time >= 0.35:
+			_vent_phase = "drop"
+			_vent_time = 0.0
+			_vent_from = global_position
+		return
+	_vent_time += delta
+	var drop := clampf(_vent_time / 0.45, 0.0, 1.0)
+	var land: Vector3 = _vent_exit.stand_global()
+	global_position = _vent_from.lerp(land, drop)
+	_costume.set_reach(1.0 - drop)
+	if drop < 1.0:
+		return
+	_vent_exit.close_grate()
+	_set_body_collision(false)
+	visible = true
+	venting = false
+	_vent_lockout = 2.5
+	_costume.set_reach(0.0)
+	global_position = land
+	velocity = Vector3.ZERO
+
+
+func _step_toward(point: Vector3, speed: float, delta: float) -> void:
+	var dir := point - global_position
+	dir.y = 0.0
+	if dir.length_squared() < 0.04:
+		velocity.x = move_toward(velocity.x, 0.0, delta * 24.0)
+		velocity.z = move_toward(velocity.z, 0.0, delta * 24.0)
+		dir = Vector3.ZERO
+	else:
+		dir = _steer(dir.normalized())
+		velocity.x = dir.x * speed
+		velocity.z = dir.z * speed
+	if not is_on_floor():
+		velocity.y -= 22.0 * delta
+	else:
+		velocity.y = -0.2
+	move_and_slide()
+	_face_along(dir, false)
+	var moved := Vector2(velocity.x, velocity.z).length()
+	_costume.walk(delta, moved)
+
+
+func _ride_path(delta: float) -> bool:
+	var left := 9.0 * delta
+	while left > 0.0 and _vent_cursor < _vent_path.size():
+		var target: Vector3 = _vent_path[_vent_cursor]
+		var offset := target - global_position
+		var gap := offset.length()
+		if gap <= left:
+			global_position = target
+			left -= gap
+			_vent_cursor += 1
+		else:
+			global_position += offset / gap * left
+			left = 0.0
+	_stride += 9.0 * delta
+	if _stride > 0.95:
+		_stride = 0.0
+		_play_step()
+	return _vent_cursor >= _vent_path.size()
+
+
+func _flat_to(point: Vector3) -> float:
+	var here := global_position
+	var there := point
+	here.y = 0.0
+	there.y = 0.0
+	return here.distance_to(there)
+
+
+func _face_point(point: Vector3) -> void:
+	var flat := point - global_position
+	flat.y = 0.0
+	if flat.length_squared() < 0.001:
+		return
+	look_at(global_position + flat, Vector3.UP)
+
+
+func _set_body_collision(disabled: bool) -> void:
+	var shape := get_node_or_null("Collision") as CollisionShape3D
+	if shape:
+		shape.disabled = disabled
+
+
+func _pace(dist: float) -> float:
+	var far_boost := 1.0 + maxf(sense_scale - 1.0, 0.0) * 0.35
+	var far_speed := lerpf(5.8, 7.4, aggression) * speed_scale * far_boost
+	var creep := lerpf(1.2, 1.9, aggression) * speed_scale
+	var charge := lerpf(4.8, 6.5, aggression) * speed_scale
+	var commit := _sees and not (watch_behind and not _hunting())
+	var close := charge if commit else creep
+	if dist >= 16.0:
+		return far_speed
+	if dist <= 7.0:
+		return close
+	return lerpf(close, far_speed, (dist - 7.0) / 9.0)
+
+
+func _describe(speed: float, staring: bool) -> void:
+	if staring and not relentless and speed < 0.25:
+		mind = "parado na luz"
+	elif watch_behind and not _hunting() and (_sees or _hears or _seen > 0.0):
+		mind = "atrás de você"
+	elif _sees and _flat_distance() < 7.0:
+		mind = "investindo"
+	elif _mode == "search":
+		mind = "procurando"
+	elif _flat_distance() > 16.0:
+		mind = "correndo"
+	elif _flat_distance() < 7.0:
+		mind = "espreitando"
+	else:
+		mind = "aproximando"
+
+
+func _mark(at: Vector3) -> void:
+	_known = at
+	_known.y = 0.1
+	_known_valid = true
+
+
+func _goal_position() -> Vector3:
+	var trailing := watch_behind and not _hunting() and (_sees or _hears or _seen > 0.0)
+	if trailing:
+		return _behind_spot(_follow_distance())
+	if _seen > 0.0:
+		return _player.global_position
+	if _mode == "hunt" and _known_valid:
+		return _known
+	if _mode == "search":
+		return _search_point
+	return _patrol[_patrol_i]
+
+
 func _chase_direction() -> Vector3:
-	var goal := _player.global_position
-	if watch_behind and not _hunting():
-		goal = _behind_spot(_follow_distance())
-		if _flat_distance() < _follow_distance() - 0.3:
-			return Vector3.ZERO
+	var goal := _goal_position()
+	var trailing := watch_behind and not _hunting() and (_sees or _hears or _seen > 0.0)
+	if trailing and _flat_distance() < _follow_distance() - 0.3 and not _is_in_front():
+		return Vector3.ZERO
 	var dir := goal - global_position
 	dir.y = 0.0
-	if dir.length_squared() < 0.12:
+	if dir.length_squared() < 0.16:
 		return Vector3.ZERO
-	return dir.normalized()
+	return _steer(dir.normalized())
 
 
 func _behind_spot(distance: float) -> Vector3:
@@ -252,58 +554,103 @@ func _walkable(pos: Vector3) -> bool:
 	return true
 
 
-func _blink_closer() -> void:
-	if _player == null:
-		return
-	if watch_behind and not _hunting():
-		var spot := _behind_spot(_follow_distance() + 0.8)
-		if _walkable(spot) and spot.distance_to(_player.global_position) > catch_distance + 1.5:
-			global_position = spot
-			velocity = Vector3.ZERO
-			_play_blink()
-		return
-	var origin := _player.global_position
-	var cam: Camera3D = _player.get_camera()
-	var forward := -cam.global_transform.basis.z
-	forward.y = 0.0
-	if forward.length_squared() < 0.001:
-		forward = Vector3.FORWARD
-	forward = forward.normalized()
-	var behind := -forward
-	var current := _flat_distance()
-	var desired := clampf(current * lerpf(0.7, 0.42, aggression), lerpf(7.5, 2.8, aggression), 14.0) * blink_closer
-	var best := global_position
-	var best_score := -999.0
-	for i in 18:
+func _arrived(point: Vector3) -> bool:
+	var here := global_position
+	var goal := point
+	here.y = 0.0
+	goal.y = 0.0
+	return here.distance_to(goal) < 1.35
+
+
+func _pick_around(origin: Vector3, radius: float) -> Vector3:
+	for _i in 8:
 		var ang := randf() * TAU
-		var dir := Vector3(cos(ang), 0.0, sin(ang))
-		dir = (dir + behind * 1.6).normalized()
-		var pos := origin + dir * randf_range(desired * 0.85, desired * 1.15)
+		var pos := origin + Vector3(cos(ang), 0.0, sin(ang)) * randf_range(radius * 0.45, radius)
 		pos.y = 0.1
-		if not _destination_clear(pos):
-			continue
-		var to_player := pos - origin
-		to_player.y = 0.0
-		var view := forward.dot(to_player.normalized()) if to_player.length_squared() > 0.01 else 1.0
-		var score := -view * 3.0 - absf(to_player.length() - desired) * 0.08
-		if score > best_score:
-			best_score = score
-			best = pos
-	if best_score < -100.0:
-		return
-	global_position = best
-	velocity = Vector3.ZERO
-	if _flat_distance() < 18.0:
-		_play_blink()
+		if _walkable(pos):
+			return pos
+	return origin
 
 
-func _destination_clear(pos: Vector3) -> bool:
-	if pos.distance_to(_player.global_position) < maxf(1.7, 2.8 * blink_closer):
+func _nearest_patrol() -> int:
+	var best := 0
+	var best_d := 9999.0
+	for i in _patrol.size():
+		var gap := global_position.distance_to(_patrol[i])
+		if gap < best_d:
+			best_d = gap
+			best = i
+	return best
+
+
+func _hearing_range() -> float:
+	var speed := Vector2(_player.velocity.x, _player.velocity.z).length()
+	var reach := 0.0
+	if _player.hidden:
+		speed = 0.0
+	if speed > 4.8:
+		reach = lerpf(16.0, 22.0, aggression)
+	elif speed > 0.45:
+		reach = lerpf(7.0, 10.5, aggression)
+	reach += float(_player.get("noise"))
+	return reach * sense_scale
+
+
+func _can_see_player() -> bool:
+	if _player.hidden:
 		return false
-	var game := get_parent()
-	if game and game.has_method("is_position_clear"):
-		return game.is_position_clear(pos, 1.3)
-	return true
+	var eye := global_position + Vector3(0.0, 1.7, 0.0)
+	var chest := _player.global_position + Vector3(0.0, 1.2, 0.0)
+	var to := chest - eye
+	var gap := to.length()
+	if gap < 0.2 or gap > 26.0:
+		return false
+	var forward := -global_transform.basis.z
+	forward.y = 0.0
+	var flat := Vector3(to.x, 0.0, to.z)
+	if forward.length_squared() < 0.001 or flat.length_squared() < 0.001:
+		return false
+	if forward.normalized().dot(flat.normalized()) < 0.2:
+		return false
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return true
+	var query := PhysicsRayQueryParameters3D.create(eye, chest)
+	query.exclude = [get_rid()]
+	query.collide_with_areas = false
+	var hit: Dictionary = space.intersect_ray(query)
+	if hit.is_empty():
+		return true
+	return hit.collider == _player
+
+
+func _steer(dir: Vector3) -> Vector3:
+	if _clearance(dir) >= 1.25:
+		return dir
+	var side := dir.cross(Vector3.UP)
+	if side.length_squared() < 0.001:
+		return dir
+	side = side.normalized()
+	var left := (dir * 0.25 - side).normalized()
+	var right := (dir * 0.25 + side).normalized()
+	if _clearance(left) >= _clearance(right):
+		return left
+	return right
+
+
+func _clearance(dir: Vector3) -> float:
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return 2.4
+	var from := global_position + Vector3(0.0, 1.0, 0.0)
+	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 2.4)
+	query.exclude = [get_rid(), _player.get_rid()]
+	query.collide_with_areas = false
+	var hit: Dictionary = space.intersect_ray(query)
+	if hit.is_empty():
+		return 2.4
+	var point: Vector3 = hit.position
+	return from.distance_to(point)
 
 
 func _player_is_looking() -> bool:
@@ -362,12 +709,16 @@ func _face_player() -> void:
 	look_at(global_position + flat, Vector3.UP)
 
 
-func _play_blink() -> void:
-	var player := get_node_or_null("Blink")
-	if player == null:
+func _face_along(dir: Vector3, staring: bool) -> void:
+	if _sees or staring:
+		_face_player()
 		return
-	player.stream = _whoosh()
-	player.play()
+	var flat := Vector3(velocity.x, 0.0, velocity.z)
+	if flat.length_squared() < 0.04:
+		flat = dir
+	if flat.length_squared() < 0.001:
+		return
+	look_at(global_position + flat, Vector3.UP)
 
 
 func _build_body() -> void:
@@ -387,13 +738,6 @@ func _build_body() -> void:
 	_costume.rotation.y = PI
 	add_child(_costume)
 	_eye_mat = _costume.eye_material
-
-	var blink := AudioStreamPlayer3D.new()
-	blink.name = "Blink"
-	blink.unit_size = 8.0
-	blink.max_distance = 24.0
-	blink.volume_db = 3.0
-	add_child(blink)
 
 	for i in 3:
 		_steps.append(_step_sound(i))
@@ -520,27 +864,6 @@ func _breath_sound() -> AudioStreamWAV:
 	wav.loop_begin = 0
 	wav.loop_end = count
 	return wav
-
-
-func _whoosh() -> AudioStreamWAV:
-	var mix := 22050.0
-	var length := 0.55
-	var count := int(mix * length)
-	var out := PackedFloat32Array()
-	out.resize(count)
-	var a := 0.0
-	var b := 0.0
-	var phase := 0.0
-	for i in count:
-		var t := float(i) / mix
-		var u := t / length
-		var noise := randf_range(-1.0, 1.0)
-		a += (noise - a) * lerpf(0.55, 0.06, u)
-		b += (noise - b) * 0.02
-		phase += TAU * lerpf(190.0, 70.0, u) / mix
-		var env := (1.0 - exp(-t * 28.0)) * exp(-t * 5.5)
-		out[i] = ((a - b) * 0.9 + sin(phase) * 0.35 + sin(phase * 2.0) * 0.2) * env
-	return _wav_from(out)
 
 
 func _wav_from(samples: PackedFloat32Array) -> AudioStreamWAV:

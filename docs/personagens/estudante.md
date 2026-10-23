@@ -24,6 +24,7 @@ caderno que ele segura ao pegar um documento.
 | Shift | Correr |
 | F | Lanterna |
 | E | Pegar documento, ou entrar e sair de um armário |
+| Espaço | Prender a respiração dentro do armário, quando ele está perto |
 | Esc | Soltar o mouse |
 | F3 | Painel de debug |
 
@@ -32,6 +33,7 @@ caderno que ele segura ao pegar um documento.
 - Lanterna com bateria; recarrega quando desligada.
 - Ao pegar um documento, o caderno vem até a câmera e abre.
 - Armários nas salas: E entra, a porta fecha, e o mascote não alcança enquanto se está dentro. E sai.
+- Se ele chega perto do armário, segure Espaço para prender a respiração. Soltar cedo demais, ou ficar sem ar, faz ele abrir a porta e puxar você para fora.
 
 ## Arquivos
 

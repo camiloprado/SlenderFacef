@@ -9,6 +9,10 @@ const BATTERY_RECHARGE := 6.0
 var active := false
 var hidden := false
 var hide_grace := 0.0
+var noise := 0.0
+var breath := 4.5
+var breath_max := 4.5
+var holding_breath := false
 var sprinting := false
 var flashlight_on := true
 var battery := 100.0
@@ -83,6 +87,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if holding_breath:
+		noise = 0.0
+	elif noise > 0.0:
+		noise = maxf(noise - delta * 4.5, 0.0)
 	if hide_grace > 0.0:
 		hide_grace = maxf(hide_grace - delta, 0.0)
 	if not active or hidden:

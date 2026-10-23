@@ -46,8 +46,8 @@ const DOCS: Array[Dictionary] = [
 		"title": "Relatório de estágio",
 		"pos": Vector3(-10, 0, -56.8),
 		"yaw": PI / 2.0,
-		"lore": "O relatório descreve visitas de que você não se lembra. A cada parágrafo, ele aparece um corredor mais perto, como se o texto virasse a página sozinho.",
-		"effect": "Ele teleporta mais vezes e aparece mais perto.",
+		"lore": "O relatório descreve visitas de que você não se lembra. Ele aprendeu a ouvir o corredor. Um passo longe demais e ele sabe em que bloco você entrou.",
+		"effect": "Ele escuta mais longe e fecha a distância mais rápido.",
 	},
 	{
 		"id": "horas",
@@ -103,6 +103,13 @@ var _debug_hidden_by_scare := false
 var _player: CharacterBody3D
 var _slender: CharacterBody3D
 var _locker: Node3D
+var _breath_bar: ProgressBar
+var _breath_threat := false
+var _breath_slip := 0.0
+var _pulling := false
+var _vents: Array[Node3D] = []
+var _duct_pts: Array[Vector3] = []
+var _duct_links: Array[PackedInt32Array] = []
 var _grace := 8.0
 var _awake := false
 var _hang_pivot: Node3D
@@ -218,6 +225,7 @@ func _ready() -> void:
 	_build_slender()
 	_build_ui()
 	_build_pages()
+	_settle_vents()
 	_refresh_list()
 	_build_audio()
 
@@ -243,7 +251,8 @@ func _process(delta: float) -> void:
 		if _grace <= 0.0:
 			_slender.active = true
 			_show_hint("Ele está andando pela faculdade.")
-	if debug_god and _slender.active and not _player.hidden:
+	_update_breath(delta)
+	if debug_god and _slender.active and not _player.hidden and not _slender.venting:
 		var close := _player.global_position.distance_to(_slender.global_position)
 		if close < _slender.catch_distance + 0.4:
 			_slender.static_level = minf(_slender.static_level, 0.15)
@@ -298,6 +307,8 @@ func _physics_process(_delta: float) -> void:
 	if not Input.is_action_just_pressed("interact"):
 		return
 	if _player.hidden:
+		if _breath_threat or _pulling:
+			return
 		if _locker:
 			_locker.leave(_player)
 		return
@@ -409,7 +420,7 @@ func _close_reading() -> void:
 	_return_to_play()
 	_grace = 0.0
 	_slender.active = true
-	_slender._teleport_timer = 0.35
+	_slender.hear(_player.global_position)
 	_show_hint(str(doc.effect))
 
 
@@ -1115,9 +1126,81 @@ func _show_hint(text: String) -> void:
 	_hint_timer = 4.5
 
 
+func _update_breath(delta: float) -> void:
+	if _player == null or _slender == null or _breath_bar == null:
+		return
+	_player.breath_max = lerpf(4.5, 2.8, _slender.aggression)
+	if _player.breath > _player.breath_max:
+		_player.breath = _player.breath_max
+	var dist := _player.global_position.distance_to(_slender.global_position)
+	var mode := str(_slender.get("_mode"))
+	var hunting := mode == "hunt" or mode == "search"
+	var close := dist < (9.0 if _breath_threat else 7.0)
+	_breath_threat = (
+		_player.hidden
+		and not _pulling
+		and not _slender.venting
+		and _slender.active
+		and hunting
+		and close
+	)
+	if _breath_threat:
+		var holding := Input.is_action_pressed("breath")
+		_player.holding_breath = holding
+		if holding:
+			_player.breath = maxf(_player.breath - delta, 0.0)
+			_player.noise = 0.0
+			_breath_slip = 0.0
+			if _player.breath <= 0.0:
+				_fail_breath()
+		elif dist < 4.5:
+			_breath_slip += delta
+			if _breath_slip >= 0.8:
+				_fail_breath()
+		else:
+			_breath_slip = 0.0
+	else:
+		_player.holding_breath = false
+		_breath_slip = 0.0
+		if not _pulling:
+			_player.breath = minf(_player.breath + delta * 1.6, _player.breath_max)
+	var show: bool = _player.hidden and (_breath_threat or _player.breath < _player.breath_max - 0.15)
+	_breath_bar.visible = show and state == State.PLAYING
+	_breath_bar.value = _player.breath / maxf(_player.breath_max, 0.1)
+
+
+func _fail_breath() -> void:
+	if _pulling:
+		return
+	_breath_threat = false
+	_player.holding_breath = false
+	_breath_slip = 0.0
+	if debug_god or _locker == null:
+		_player.breath = _player.breath_max * 0.45
+		return
+	_pulling = true
+	_player.noise = 22.0
+	_slender.hear(_locker.global_position)
+	_locker.drag_out(_player, _slender)
+
+
+func _on_locker_pulled() -> void:
+	if debug_god:
+		_slender.held = false
+		_pulling = false
+		_player.breath = _player.breath_max
+		return
+	_start_caught_scare("O mascote abriu o armário.")
+
+
 func _update_prompt() -> void:
 	if _player.hidden:
-		_prompt_label.text = "E  —  Sair do armário"
+		if _pulling:
+			_prompt_label.text = ""
+		elif _breath_threat:
+			_prompt_label.text = "Segure Espaço  —  prender a respiração"
+		else:
+			_prompt_label.text = "E  —  Sair do armário"
 		return
 	var prompt := ""
 	for node in get_tree().get_nodes_in_group("pages"):
@@ -1220,6 +1303,7 @@ func _build_world() -> void:
 	_add_room_floors()
 	_add_signs()
 	_add_furniture()
+	_add_ducts()
 	_add_school_lights()
 	_add_outside()
 	_add_hanging_costume()
@@ -1695,7 +1779,184 @@ func _add_lockers() -> void:
 		locker.set_script(script)
 		locker.position = spot[0]
 		locker.rotation.y = spot[1]
+		locker.pulled.connect(_on_locker_pulled)
 		add_child(locker)
+
+
+func _add_ducts() -> void:
+	var metal := StandardMaterial3D.new()
+	metal.albedo_color = Color(0.55, 0.58, 0.6)
+	metal.metallic = 0.8
+	metal.roughness = 0.32
+	_duct_box(Vector3(0.9, 0.36, 62.0), Vector3(0.0, 2.95, -25.0), metal)
+	for c: float in BLOCKS:
+		_duct_box(Vector3(26.0, 0.36, 0.9), Vector3(0.0, 2.95, c), metal)
+	var spine := PackedFloat32Array([6.0, 0.0, -12.0, -24.4, -36.0, -48.8, -56.0])
+	var spine_ids: Array[int] = []
+	for z in spine:
+		spine_ids.append(_duct_point(Vector3(0.0, 2.95, z)))
+	for i in spine_ids.size() - 1:
+		_duct_join(spine_ids[i], spine_ids[i + 1])
+	var vent_script := load("res://scripts/vent.gd")
+	var mouths: Array[Vector3] = [
+		Vector3(0.0, 2.95, 6.0),
+		Vector3(0.0, 2.95, -12.0),
+		Vector3(0.0, 2.95, -36.0),
+		Vector3(0.0, 2.95, -56.0),
+	]
+	for c: float in BLOCKS:
+		var junction := _duct_index_at(Vector3(0.0, 2.95, c))
+		var left := _duct_point(Vector3(-13.0, 2.95, c))
+		var right := _duct_point(Vector3(13.0, 2.95, c))
+		_duct_join(left, junction)
+		_duct_join(junction, right)
+		mouths.append(Vector3(-13.0, 2.95, c))
+		mouths.append(Vector3(13.0, 2.95, c))
+	for mouth in mouths:
+		var vent := Node3D.new()
+		vent.set_script(vent_script)
+		vent.position = mouth
+		vent.duct_index = _duct_index_at(mouth)
+		add_child(vent)
+		_vents.append(vent)
+
+
+func _settle_vents() -> void:
+	for vent in _vents:
+		if is_position_clear(vent.stand_global(), 0.45):
+			continue
+		var origin: Vector3 = vent.position
+		var shifted := origin
+		for _step in 12:
+			shifted.x -= signf(origin.x) * 0.45
+			vent.position = shifted
+			if is_position_clear(vent.stand_global(), 0.45):
+				break
+		if not is_position_clear(vent.stand_global(), 0.45):
+			vent.position = origin
+
+
+func _duct_box(size: Vector3, pos: Vector3, mat: Material) -> void:
+	var body := StaticBody3D.new()
+	body.position = pos
+	var mesh := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = size
+	mesh.mesh = box
+	mesh.material_override = mat
+	body.add_child(mesh)
+	var shape := CollisionShape3D.new()
+	var col := BoxShape3D.new()
+	col.size = size
+	shape.shape = col
+	body.add_child(shape)
+	add_child(body)
+
+
+func _duct_point(point: Vector3) -> int:
+	_duct_pts.append(point)
+	_duct_links.append(PackedInt32Array())
+	return _duct_pts.size() - 1
+
+
+func _duct_join(a: int, b: int) -> void:
+	var left := _duct_links[a]
+	var right := _duct_links[b]
+	left.append(b)
+	right.append(a)
+	_duct_links[a] = left
+	_duct_links[b] = right
+
+
+func _duct_index_at(point: Vector3) -> int:
+	for i in _duct_pts.size():
+		if _duct_pts[i].distance_to(point) < 0.2:
+			return i
+	return 0
+
+
+func vent_shortcut(from: Vector3, goal: Vector3, player_pos: Vector3) -> Dictionary:
+	if _vents.is_empty() or from.distance_to(goal) < 18.0:
+		return {}
+	var entry: Node3D = _nearest_vent(from)
+	var exit: Node3D = _best_vent_exit(goal, player_pos)
+	if entry == null or exit == null or entry == exit:
+		return {}
+	var path := _duct_path(entry.duct_index, exit.duct_index)
+	if path.is_empty():
+		return {}
+	var run := 6.2
+	var entry_stand: Vector3 = entry.stand_global()
+	var exit_stand: Vector3 = exit.stand_global()
+	var on_foot: float = from.distance_to(goal) / run
+	var by_duct: float = from.distance_to(entry_stand) / run + _path_length(path) / 9.0 + exit_stand.distance_to(goal) / run + 1.4
+	if by_duct >= on_foot:
+		return {}
+	return {"entry": entry, "exit": exit, "path": path}
+
+
+func _nearest_vent(from: Vector3) -> Node3D:
+	var best: Node3D = null
+	var best_d := 9999.0
+	for vent in _vents:
+		var gap := from.distance_to(vent.stand_global())
+		if gap < best_d:
+			best_d = gap
+			best = vent
+	return best
+
+
+func _best_vent_exit(goal: Vector3, player_pos: Vector3) -> Node3D:
+	var best: Node3D = null
+	var best_d := 9999.0
+	for vent in _vents:
+		var stand: Vector3 = vent.stand_global()
+		if stand.distance_to(player_pos) < 8.0:
+			continue
+		var gap := stand.distance_to(goal)
+		if gap < best_d:
+			best_d = gap
+			best = vent
+	return best
+
+
+func _duct_path(start: int, finish: int) -> PackedVector3Array:
+	var previous: PackedInt32Array = PackedInt32Array()
+	previous.resize(_duct_pts.size())
+	previous.fill(-1)
+	var queue: Array[int] = [start]
+	previous[start] = start
+	var found := false
+	while not queue.is_empty():
+		var current: int = queue.pop_front()
+		if current == finish:
+			found = true
+			break
+		for nxt in _duct_links[current]:
+			if previous[nxt] != -1:
+				continue
+			previous[nxt] = current
+			queue.append(nxt)
+	if not found:
+		return PackedVector3Array()
+	var rev: Array[int] = []
+	var cursor := finish
+	while cursor != start:
+		rev.append(cursor)
+		cursor = previous[cursor]
+	rev.append(start)
+	rev.reverse()
+	var path := PackedVector3Array()
+	for idx in rev:
+		path.append(_duct_pts[idx])
+	return path
+
+
+func _path_length(path: PackedVector3Array) -> float:
+	var total := 0.0
+	for i in path.size() - 1:
+		total += path[i].distance_to(path[i + 1])
+	return total
 
 
 func _add_school_lights() -> void:
@@ -1829,6 +2090,21 @@ func _build_ui() -> void:
 	_box_label(_prompt_label, 0.18, 0.88, 0.82, 0.96)
 	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_breath_bar = ProgressBar.new()
+	_breath_bar.min_value = 0.0
+	_breath_bar.max_value = 1.0
+	_breath_bar.value = 1.0
+	_breath_bar.show_percentage = false
+	_breath_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_breath_bar.visible = false
+	_breath_bar.anchor_left = 0.36
+	_breath_bar.anchor_right = 0.64
+	_breath_bar.anchor_top = 0.8
+	_breath_bar.anchor_bottom = 0.835
+	var breath_fill := StyleBoxFlat.new()
+	breath_fill.bg_color = Color(0.72, 0.86, 0.95)
+	_breath_bar.add_theme_stylebox_override("fill", breath_fill)
+	_hud.add_child(_breath_bar)
 
 	_add_crosshair(_hud)
 	_build_end_panel(layer)
@@ -2352,6 +2628,7 @@ func _refresh_debug() -> void:
 		"Estático  %.0f%%" % (_slender.static_level * 100.0),
 		"Agressão  %.0f%%     Graça  %.1f s" % [_slender.aggression * 100.0, _grace],
 		"Olhando  %s     Na luz  %s" % ["sim" if looking else "não", "sim" if lit else "não"],
+		"Cabeça  " + str(_slender.mind),
 		"Ativo  %s     Deus  %s" % ["sim" if _slender.active else "não", "sim" if debug_god else "não"],
 		"Lanterna  %s  %d%%" % ["ligada" if _player.flashlight_on else "desligada", int(_player.battery)],
 		"Documentos  %d / 8" % pages,
@@ -2544,6 +2821,7 @@ func _ensure_actions() -> void:
 	_bind("sprint", KEY_SHIFT)
 	_bind("flashlight", KEY_F)
 	_bind("interact", KEY_E)
+	_bind("breath", KEY_SPACE)
 	_bind("restart", KEY_R)
 	_bind("debug_toggle", KEY_F3)
 
