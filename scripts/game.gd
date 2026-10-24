@@ -181,6 +181,8 @@ var _cer_hi := 0.0
 var _cer_lo := 0.0
 var _clap := 0.0
 var _wall_mats := {}
+var _props := Surfaces.Batch.new()
+var _chalk_mat: ShaderMaterial
 var _read_card: PanelContainer
 var _read_style: StyleBoxFlat
 var _read_logo: TextureRect
@@ -225,6 +227,7 @@ func _ready() -> void:
 	_build_slender()
 	_build_ui()
 	_build_pages()
+	_props.flush()
 	_settle_vents()
 	_refresh_list()
 	_build_audio()
@@ -1335,6 +1338,9 @@ func _wall_material(color: Color) -> ShaderMaterial:
 	mat.shader = load("res://shaders/wall.gdshader")
 	mat.set_shader_parameter("tint", color.lightened(0.28))
 	mat.set_shader_parameter("trim", Color(0.07, 0.12, 0.24).lerp(color, 0.25))
+	mat.set_shader_parameter("plaster", Surfaces.tex("Plaster001", "Color"))
+	mat.set_shader_parameter("plaster_normal", Surfaces.tex("Plaster001", "NormalGL"))
+	mat.set_shader_parameter("plaster_rough", Surfaces.tex("Plaster001", "Roughness"))
 	_wall_mats[key] = mat
 	return mat
 
@@ -1345,6 +1351,7 @@ func _floor_material(color: Color, tile: float, gloss: float) -> ShaderMaterial:
 	mat.set_shader_parameter("tint", color)
 	mat.set_shader_parameter("tile", tile)
 	mat.set_shader_parameter("gloss", gloss)
+	mat.set_shader_parameter("grain_normal", Surfaces.tex("Plaster001", "NormalGL"))
 	return mat
 
 
@@ -1365,15 +1372,21 @@ func _leaf_material(color: Color, lumps := 0.16) -> ShaderMaterial:
 
 func _add_ceiling() -> void:
 	var mesh := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(OUTER_X * 2.0 + 0.4, 0.12, SOUTH_Z - NORTH_Z + 0.4)
-	mesh.mesh = box
-	mesh.position = Vector3(0, 3.2, (SOUTH_Z + NORTH_Z) * 0.5)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.08, 0.09, 0.11)
-	mat.roughness = 1.0
-	mesh.material_override = mat
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(OUTER_X * 2.0 + 0.4, SOUTH_Z - NORTH_Z + 0.4)
+	mesh.mesh = plane
+	mesh.position = Vector3(0, 3.14, (SOUTH_Z + NORTH_Z) * 0.5)
+	mesh.rotation.x = PI
+	var tile := 2.4
+	mesh.material_override = Surfaces.tiled("OfficeCeiling001", Color(0.42, 0.43, 0.45), plane.size / tile, 0.0, 1.0, 0.8)
 	add_child(mesh)
+	var slab := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(plane.size.x, 0.1, plane.size.y)
+	slab.mesh = box
+	slab.position = Vector3(0, 3.2, mesh.position.z)
+	slab.material_override = Surfaces.flat(Color(0.05, 0.05, 0.06), 1.0)
+	add_child(slab)
 
 
 func _add_school_walls() -> void:
@@ -1436,9 +1449,10 @@ func _add_outside() -> void:
 
 	var facade := Color(0.46, 0.46, 0.48)
 	var piece := OUTER_X + 0.2 - 1.3
-	_box(self, Vector3(piece, 4.4, 0.1), Vector3(-(1.3 + piece * 0.5), 2.2, 12.45), facade)
-	_box(self, Vector3(piece, 4.4, 0.1), Vector3(1.3 + piece * 0.5, 2.2, 12.45), facade)
-	_box(self, Vector3(2.6, 1.9, 0.1), Vector3(0, 3.45, 12.45), facade)
+	var facade_skin := _wall_material(facade)
+	_box(self, Vector3(piece, 4.4, 0.1), Vector3(-(1.3 + piece * 0.5), 2.2, 12.45), facade, false, facade_skin)
+	_box(self, Vector3(piece, 4.4, 0.1), Vector3(1.3 + piece * 0.5, 2.2, 12.45), facade, false, facade_skin)
+	_box(self, Vector3(2.6, 1.9, 0.1), Vector3(0, 3.45, 12.45), facade, false, facade_skin)
 	_wall(Vector3(OUTER_X * 2.0 + 0.4, 1.2, 0.5), Vector3(0, 3.8, 12.2), facade.darkened(0.2))
 	var frame := Color(0.12, 0.13, 0.15)
 	_box(self, Vector3(0.14, 2.5, 0.2), Vector3(-1.37, 1.25, 12.5), frame)
@@ -1549,64 +1563,45 @@ func _tree(pos: Vector3) -> void:
 	body.position = pos
 	body.rotation.y = rng.randf() * TAU
 	add_child(body)
-	var bark := _leaf_material(Color(0.34, 0.23, 0.15), 0.0)
-	bark.set_shader_parameter("fuzz", 0.2)
-	bark.set_shader_parameter("grime", 0.8)
-	var height := rng.randf_range(2.1, 2.6)
-	var trunk := MeshInstance3D.new()
-	var trunk_mesh := CylinderMesh.new()
-	trunk_mesh.top_radius = 0.1
-	trunk_mesh.bottom_radius = 0.2
-	trunk_mesh.height = height
-	trunk_mesh.radial_segments = 16
-	trunk.mesh = trunk_mesh
-	trunk.position.y = height * 0.5
-	trunk.rotation.z = rng.randf_range(-0.05, 0.05)
-	trunk.material_override = bark
-	body.add_child(trunk)
-	for i in 3:
-		var root := MeshInstance3D.new()
-		var flare := CylinderMesh.new()
-		flare.top_radius = 0.02
-		flare.bottom_radius = 0.09
-		flare.height = 0.5
-		root.mesh = flare
-		var ang := TAU * float(i) / 3.0 + rng.randf() * 0.6
-		root.position = Vector3(cos(ang) * 0.2, 0.1, sin(ang) * 0.2)
-		root.rotation = Vector3(sin(ang) * 1.2, 0.0, -cos(ang) * 1.2)
-		root.material_override = bark
-		body.add_child(root)
-	var crowns: Array[Vector3] = []
-	for i in 4:
-		var ang := TAU * float(i) / 4.0 + rng.randf_range(-0.4, 0.4)
-		var lean := rng.randf_range(0.55, 0.85)
-		var branch := MeshInstance3D.new()
-		var limb := CylinderMesh.new()
-		limb.top_radius = 0.035
-		limb.bottom_radius = 0.07
-		limb.height = 1.1
-		branch.mesh = limb
-		var dir := Vector3(cos(ang) * sin(lean), cos(lean), sin(ang) * sin(lean))
-		var base := Vector3(0.0, height * rng.randf_range(0.72, 0.9), 0.0)
-		var side := dir.cross(Vector3.FORWARD if absf(dir.z) < 0.9 else Vector3.RIGHT).normalized()
-		branch.basis = Basis(side, dir, side.cross(dir))
-		branch.position = base + dir * 0.55
-		branch.material_override = bark
-		body.add_child(branch)
-		crowns.append(base + dir * 1.15)
-	crowns.append(Vector3(0.0, height + 0.55, 0.0))
-	var greens: Array[Color] = [Color(0.14, 0.32, 0.12), Color(0.2, 0.38, 0.13), Color(0.11, 0.27, 0.14)]
-	for i in crowns.size():
-		var crown := MeshInstance3D.new()
-		var ball := SphereMesh.new()
-		ball.radius = rng.randf_range(0.75, 1.0) if i < crowns.size() - 1 else 1.15
-		ball.height = ball.radius * 2.0 * rng.randf_range(0.8, 0.95)
-		ball.radial_segments = 32
-		ball.rings = 18
-		crown.mesh = ball
-		crown.position = crowns[i]
-		crown.material_override = _leaf_material(greens[rng.randi() % greens.size()])
-		body.add_child(crown)
+	var bark := Surfaces.pbr("Bark007", Color(0.42, 0.33, 0.25), 1.6, 0.0, 1.0, 1.4)
+	var height := rng.randf_range(2.9, 3.5)
+	var lean := Vector3(rng.randf_range(-0.12, 0.12), 0.0, rng.randf_range(-0.12, 0.12))
+	var top := Vector3(lean.x, height, lean.z)
+	_limb(body, Vector3.ZERO, top * 0.55, 0.22, 0.17, bark)
+	_limb(body, top * 0.55, top, 0.17, 0.1, bark)
+	for i in 5:
+		var ang := TAU * float(i) / 5.0 + rng.randf() * 0.7
+		var root_end := Vector3(cos(ang) * 0.48, -0.02, sin(ang) * 0.48)
+		_limb(body, Vector3(cos(ang) * 0.06, 0.32, sin(ang) * 0.06), root_end, 0.08, 0.02, bark)
+	var clusters: Array[Vector3] = []
+	for i in 6:
+		var ang := TAU * float(i) / 6.0 + rng.randf_range(-0.35, 0.35)
+		var tilt := rng.randf_range(0.6, 1.0)
+		var dir := Vector3(cos(ang) * sin(tilt), cos(tilt), sin(ang) * sin(tilt))
+		var base := top * rng.randf_range(0.62, 0.92)
+		var length := rng.randf_range(1.1, 1.6)
+		var tip := base + dir * length
+		_limb(body, base, tip, 0.065, 0.025, bark)
+		for k in 2:
+			var twist := ang + (float(k) - 0.5) * rng.randf_range(0.8, 1.3)
+			var twig_dir := (dir + Vector3(cos(twist), 0.5, sin(twist)) * 0.7).normalized()
+			var from := base + dir * length * rng.randf_range(0.5, 0.8)
+			var twig_tip := from + twig_dir * rng.randf_range(0.5, 0.8)
+			_limb(body, from, twig_tip, 0.03, 0.01, bark)
+			clusters.append(twig_tip)
+		clusters.append(tip)
+	clusters.append(top + Vector3(0, 0.5, 0))
+	clusters.append(top + Vector3(rng.randf_range(-0.4, 0.4), 0.1, rng.randf_range(-0.4, 0.4)))
+	var tints: Array[Color] = [Color(0.62, 0.7, 0.5), Color(0.5, 0.62, 0.42), Color(0.7, 0.74, 0.52)]
+	var leaves := _leaf_card_material(tints[rng.randi() % tints.size()])
+	for spot in clusters:
+		var size := rng.randf_range(1.3, 1.9)
+		var quad := QuadMesh.new()
+		quad.size = Vector2(size, size)
+		for c in 4:
+			var at := spot + Vector3(rng.randf_range(-0.2, 0.2), rng.randf_range(-0.1, 0.15), rng.randf_range(-0.2, 0.2))
+			var turn := Vector3(rng.randf_range(-0.45, 0.45), float(c) * PI / 4.0 + rng.randf() * 0.5, rng.randf() * TAU)
+			_prop(body, quad, Transform3D(Basis.from_euler(turn), at), leaves)
 	var shape := CollisionShape3D.new()
 	var cylinder := CylinderShape3D.new()
 	cylinder.radius = 0.25
@@ -1614,6 +1609,41 @@ func _tree(pos: Vector3) -> void:
 	shape.shape = cylinder
 	shape.position.y = height * 0.5
 	body.add_child(shape)
+
+
+func _limb(parent: Node3D, from: Vector3, to: Vector3, r0: float, r1: float, surface: Material) -> void:
+	var span := to - from
+	var length := span.length()
+	if length < 0.01:
+		return
+	var tube := CylinderMesh.new()
+	tube.bottom_radius = r0
+	tube.top_radius = r1
+	tube.height = length
+	tube.radial_segments = 10 if r0 > 0.05 else 6
+	tube.rings = 1
+	var up := span / length
+	var side := up.cross(Vector3.FORWARD if absf(up.z) < 0.9 else Vector3.RIGHT).normalized()
+	_prop(parent, tube, Transform3D(Basis(side, up, side.cross(up)), from + span * 0.5), surface)
+
+
+func _prop(parent: Node3D, mesh: Mesh, local: Transform3D, surface: Material) -> void:
+	_props.add(self, mesh, global_transform.affine_inverse() * parent.global_transform * local, surface)
+
+
+func _leaf_card_material(tint: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = load("res://assets/textures/LeafSet009/LeafSet009_Card.png")
+	mat.albedo_color = tint
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.45
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.roughness = 0.85
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.backlight_enabled = true
+	mat.backlight = Color(0.18, 0.24, 0.1)
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	return mat
 
 
 func _add_hanging_costume() -> void:
@@ -1718,50 +1748,406 @@ func _fit_pixel_size(text: String, font_size: int, max_width: float, max_height:
 
 
 func _add_furniture() -> void:
+	var oak := Color(0.34, 0.24, 0.15)
+	var dark_wood := Color(0.24, 0.16, 0.1)
+	var seat := Color(0.34, 0.1, 0.1)
 	for x in [-14.0, -11.0, -8.0, -5.0]:
-		_solid(self, Vector3(0.7, 1.8, 2.2), Vector3(x, 0.9, -10.7), Color(0.18, 0.12, 0.08))
+		_shelf(Vector3(x, 0.9, -10.7), Vector3(0.7, 1.8, 2.2), dark_wood)
 	for i in 3:
-		_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(-12.5 + float(i) * 2.2, 0.38, 6.5), Color(0.3, 0.22, 0.14))
-		_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(-12.5 + float(i) * 2.2, 0.38, 9.2), Color(0.3, 0.22, 0.14))
-	_solid(self, Vector3(3.2, 1.05, 0.6), Vector3(10.5, 0.52, -11.0), Color(0.28, 0.22, 0.16))
-	_solid(self, Vector3(1.6, 0.78, 0.8), Vector3(12.5, 0.39, 9.5), Color(0.32, 0.2, 0.12))
+		_desk(Vector3(-12.5 + float(i) * 2.2, 0.38, 6.5), Vector3(1.2, 0.75, 0.7), oak)
+		_desk(Vector3(-12.5 + float(i) * 2.2, 0.38, 9.2), Vector3(1.2, 0.75, 0.7), oak)
+	_long_table(Vector3(10.5, 0.52, -11.0), Vector3(3.2, 1.05, 0.6), oak)
+	_desk(Vector3(12.5, 0.39, 9.5), Vector3(1.6, 0.78, 0.8), Color(0.36, 0.22, 0.13))
+	_board(Vector3(-10.3, 1.6, 11.9), Vector3(3.0, 1.0, 0.1))
 
-	var seat := Color(0.3, 0.08, 0.08)
-	var wood := Color(0.3, 0.22, 0.14)
 	var b := BLOCKS[1]
 	for row in 4:
 		var rz := b - 5.0 - float(row) * 1.4
-		_solid(self, Vector3(1.8, 0.55, 0.5), Vector3(-13.3, 0.28, rz), seat)
-		_solid(self, Vector3(4.6, 0.55, 0.5), Vector3(-7.3, 0.28, rz), seat)
-	_solid(self, Vector3(8.0, 0.4, 1.4), Vector3(-9.0, 0.2, b - 11.2), Color(0.2, 0.13, 0.08))
+		_bench(Vector3(-13.3, 0.28, rz), Vector3(1.8, 0.55, 0.5), seat)
+		_bench(Vector3(-7.3, 0.28, rz), Vector3(4.6, 0.55, 0.5), seat)
+	_plinth(Vector3(-9.0, 0.2, b - 11.2), Vector3(8.0, 0.4, 1.4), Color(0.22, 0.15, 0.09))
 	for tx in [5.5, 8.0, 14.0]:
 		for tz in [b - 5.0, b - 9.5]:
-			_solid(self, Vector3(1.4, 0.75, 0.9), Vector3(tx, 0.38, tz), wood)
-	_solid(self, Vector3(4.5, 1.05, 0.6), Vector3(10.5, 0.52, b - 11.3), Color(0.5, 0.5, 0.52))
+			_desk(Vector3(tx, 0.38, tz), Vector3(1.4, 0.75, 0.9), oak)
+	_long_table(Vector3(10.5, 0.52, b - 11.3), Vector3(4.5, 1.05, 0.6), Color(0.62, 0.63, 0.64))
 
 	for c: float in [BLOCKS[1], BLOCKS[2]]:
 		for sx in [-1.0, 1.0]:
 			for i in 3:
 				var dx: float = sx * (8.1 + float(i) * 2.2)
-				_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(dx, 0.38, c + 6.5), wood)
-				_solid(self, Vector3(1.2, 0.75, 0.7), Vector3(dx, 0.38, c + 9.2), wood)
-			_solid(self, Vector3(3.0, 1.0, 0.1), Vector3(sx * 10.3, 1.6, c + 11.9), Color(0.08, 0.16, 0.1))
+				_desk(Vector3(dx, 0.38, c + 6.5), Vector3(1.2, 0.75, 0.7), oak)
+				_desk(Vector3(dx, 0.38, c + 9.2), Vector3(1.2, 0.75, 0.7), oak)
+			_board(Vector3(sx * 10.3, 1.6, c + 11.9), Vector3(3.0, 1.0, 0.1))
 
 	var a := BLOCKS[2]
-	var steel := Color(0.3, 0.32, 0.34)
 	for sz in [a - 5.0, a - 10.8]:
-		_solid(self, Vector3(3.0, 2.0, 0.6), Vector3(-13.6, 1.0, sz), steel)
-		_solid(self, Vector3(3.0, 2.0, 0.6), Vector3(-6.6, 1.0, sz), steel)
-	_solid(self, Vector3(2.8, 0.8, 1.2), Vector3(10.5, 0.4, a - 8.5), Color(0.24, 0.13, 0.07))
+		_cabinet(Vector3(-13.6, 1.0, sz), Vector3(3.0, 2.0, 0.6), Color(0.34, 0.36, 0.38))
+		_cabinet(Vector3(-6.6, 1.0, sz), Vector3(3.0, 2.0, 0.6), Color(0.34, 0.36, 0.38))
+	_long_table(Vector3(10.5, 0.4, a - 8.5), Vector3(2.8, 0.8, 1.2), Color(0.4, 0.28, 0.16))
 	for cx in [9.6, 11.4]:
-		_solid(self, Vector3(0.7, 0.9, 0.7), Vector3(cx, 0.45, a - 10.0), Color(0.12, 0.06, 0.05))
+		_chair(Vector3(cx, 0.45, a - 10.0), Vector3(0.7, 0.9, 0.7), Color(0.16, 0.08, 0.06))
 
-	var locker := Color(0.17, 0.24, 0.3)
 	for c: float in BLOCKS:
 		for sx in [-1.0, 1.0]:
 			for sz in [-7.0, 7.0]:
-				_solid(self, Vector3(0.5, 1.9, 5.0), Vector3(sx * (OUTER_X - 0.45), 0.95, c + sz), locker)
+				_closed_lockers(Vector3(sx * (OUTER_X - 0.45), 0.95, c + sz), Vector3(0.5, 1.9, 5.0), sx)
 	_add_lockers()
+
+
+func _furn_body(size: Vector3, pos: Vector3) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.position = pos
+	var shape := CollisionShape3D.new()
+	var col := BoxShape3D.new()
+	col.size = size
+	shape.shape = col
+	body.add_child(shape)
+	add_child(body)
+	return body
+
+
+func _chip(parent: Node3D, size: Vector3, pos: Vector3, color: Color, rough := 0.86, metal := 0.0, surface: Material = null) -> void:
+	var mat := surface if surface else Surfaces.flat(color, rough, metal)
+	var xform := global_transform.affine_inverse() * parent.global_transform * Transform3D(Basis.IDENTITY, pos)
+	_props.box(self, size, xform, mat)
+
+
+func _skin(parent: Node3D, size: Vector3, pos: Vector3, surface: Material) -> void:
+	_chip(parent, size, pos, Color.WHITE, 0.8, 0.0, surface)
+
+
+func _wood(color: Color, set_name := "Wood049") -> Material:
+	var gain := 2.1 if set_name == "Wood049" else 2.6
+	var tint := Color(minf(color.r * gain, 1.0), minf(color.g * gain, 1.0), minf(color.b * gain, 1.0))
+	return Surfaces.pbr(set_name, tint, 1.1, 0.0, 0.8, 0.7)
+
+
+func _desk(pos: Vector3, size: Vector3, color: Color) -> void:
+	var body := _furn_body(size, pos)
+	var top_h := 0.04
+	var top_y := size.y * 0.5 - top_h * 0.5
+	_skin(body, Vector3(size.x - 0.02, top_h, size.z - 0.02), Vector3(0.0, top_y, 0.0), _wood(color.lightened(0.08)))
+	var band := Color(0.08, 0.07, 0.06)
+	_chip(body, Vector3(size.x, top_h * 0.8, 0.012), Vector3(0.0, top_y, size.z * 0.5 - 0.004), band, 0.5)
+	_chip(body, Vector3(size.x, top_h * 0.8, 0.012), Vector3(0.0, top_y, -size.z * 0.5 + 0.004), band, 0.5)
+	_chip(body, Vector3(0.012, top_h * 0.8, size.z), Vector3(size.x * 0.5 - 0.004, top_y, 0.0), band, 0.5)
+	_chip(body, Vector3(0.012, top_h * 0.8, size.z), Vector3(-size.x * 0.5 + 0.004, top_y, 0.0), band, 0.5)
+	var frame := Surfaces.pbr("PaintedMetal004", Color(0.12, 0.13, 0.14), 1.6, 0.35, 0.8)
+	var rail_y := top_y - top_h * 0.5 - 0.02
+	_skin(body, Vector3(size.x - 0.12, 0.035, 0.025), Vector3(0.0, rail_y, size.z * 0.5 - 0.06), frame)
+	_skin(body, Vector3(size.x - 0.12, 0.035, 0.025), Vector3(0.0, rail_y, -size.z * 0.5 + 0.06), frame)
+	_chip(body, Vector3(size.x - 0.16, 0.012, size.z - 0.16), Vector3(0.0, rail_y - 0.09, 0.0), Color(0.1, 0.1, 0.11), 0.6, 0.4)
+	var leg_h := size.y - top_h
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			var foot := Vector3(sx * (size.x * 0.5 - 0.07), -top_h * 0.5, sz * (size.z * 0.5 - 0.06))
+			_skin(body, Vector3(0.035, leg_h, 0.035), foot, frame)
+			_chip(body, Vector3(0.045, 0.02, 0.045), Vector3(foot.x, -size.y * 0.5 + 0.01, foot.z), Color(0.04, 0.04, 0.04), 0.9)
+		_skin(body, Vector3(0.025, 0.025, size.z - 0.12), Vector3(sx * (size.x * 0.5 - 0.07), -size.y * 0.3, 0.0), frame)
+
+
+func _shelf(pos: Vector3, size: Vector3, color: Color) -> void:
+	var body := _furn_body(size, pos)
+	var side := _wood(color, "Wood066")
+	var board := _wood(color.lightened(0.06), "Wood066")
+	_skin(body, Vector3(size.x, size.y, 0.06), Vector3(0.0, 0.0, -size.z * 0.5 + 0.03), side)
+	_skin(body, Vector3(size.x, size.y, 0.06), Vector3(0.0, 0.0, size.z * 0.5 - 0.03), side)
+	_skin(body, Vector3(0.03, size.y - 0.04, size.z - 0.1), Vector3(-size.x * 0.5 + 0.015, 0.0, 0.0), board)
+	_skin(body, Vector3(size.x * 0.92, 0.05, size.z), Vector3(0.04, -size.y * 0.5 + 0.04, 0.0), side)
+	_skin(body, Vector3(size.x + 0.03, 0.05, size.z + 0.04), Vector3(0.015, size.y * 0.5 - 0.025, 0.0), side)
+	_chip(body, Vector3(0.02, 0.08, size.z - 0.12), Vector3(size.x * 0.5 - 0.01, -size.y * 0.5 + 0.08, 0.0), color.darkened(0.4), 0.8)
+	var covers: Array[Color] = [
+		Color(0.08, 0.13, 0.28), Color(0.42, 0.1, 0.12), Color(0.12, 0.26, 0.16),
+		Color(0.28, 0.18, 0.1), Color(0.55, 0.48, 0.32), Color(0.1, 0.16, 0.24),
+		Color(0.22, 0.1, 0.16), Color(0.16, 0.2, 0.22), Color(0.36, 0.14, 0.08),
+	]
+	for shelf_i in 3:
+		var y := -size.y * 0.28 + float(shelf_i) * size.y * 0.26
+		_skin(body, Vector3(size.x * 0.9, 0.035, size.z - 0.12), Vector3(0.04, y, 0.0), board)
+		var cursor := -size.z * 0.42
+		var limit := size.z * 0.4
+		if shelf_i > 0:
+			limit -= 0.38
+		var n := 0
+		while cursor < limit and n < 40:
+			var thick := 0.03 + float((n * 5 + shelf_i * 3) % 7) * 0.008
+			var tall := 0.2 + float((n * 3 + shelf_i) % 5) * 0.03
+			var lean := deg_to_rad(float((n % 5) - 2) * 2.1)
+			var pull := 0.035 if n % 6 == 3 else 0.0
+			var deep := size.x * 0.5 + float((n + shelf_i) % 3) * 0.025
+			_book(body, Vector3(0.03 + pull, y + 0.02 + tall * 0.5, cursor + thick * 0.5), tall, thick, deep, covers[(n + shelf_i * 2) % covers.size()], lean, n + shelf_i * 4)
+			cursor += thick + 0.006
+			n += 1
+		if shelf_i > 0:
+			_book_stack(body, Vector3(0.04, y + 0.02, limit + 0.2), covers[shelf_i * 3])
+
+
+func _bench(pos: Vector3, size: Vector3, color: Color) -> void:
+	var body := _furn_body(size, pos)
+	var seats := maxi(2, int(size.x / 0.55))
+	var seat_w := size.x / float(seats)
+	var frame := Surfaces.pbr("PaintedMetal004", Color(0.1, 0.1, 0.11), 1.6, 0.35, 0.8)
+	_skin(body, Vector3(size.x, 0.03, 0.05), Vector3(0.0, size.y * 0.5 - 0.11, 0.0), frame)
+	for i in seats:
+		var x := -size.x * 0.5 + seat_w * (float(i) + 0.5)
+		_chip(body, Vector3(seat_w - 0.05, 0.07, size.z - 0.04), Vector3(x, size.y * 0.5 - 0.06, -0.02), color.lightened(0.05), 0.95)
+		_chip(body, Vector3(seat_w - 0.05, 0.3, 0.06), Vector3(x, 0.05, size.z * 0.5 - 0.06), color.darkened(0.1), 0.95)
+		_chip(body, Vector3(seat_w - 0.09, 0.004, size.z - 0.12), Vector3(x, size.y * 0.5 - 0.024, -0.02), color.darkened(0.25), 0.95)
+	for i in seats + 1:
+		var x := -size.x * 0.5 + seat_w * float(i)
+		x = clampf(x, -size.x * 0.5 + 0.02, size.x * 0.5 - 0.02)
+		_skin(body, Vector3(0.04, size.y - 0.08, 0.04), Vector3(x, -0.04, size.z * 0.5 - 0.1), frame)
+		_skin(body, Vector3(0.03, 0.12, 0.03), Vector3(x, size.y * 0.5 - 0.14, -0.12), frame)
+
+
+func _long_table(pos: Vector3, size: Vector3, color: Color) -> void:
+	var body := _furn_body(size, pos)
+	var along_x := size.x >= size.z
+	var length := size.x if along_x else size.z
+	var depth := size.z if along_x else size.x
+	var top_h := 0.055
+	var top_y := size.y * 0.5 - top_h * 0.5
+	var top := Vector3(size.x + 0.06, top_h, size.z + 0.06)
+	_skin(body, top, Vector3(0.0, top_y, 0.0), _wood(color.lightened(0.1)))
+	var apron_y := top_y - top_h * 0.5 - 0.035
+	if along_x:
+		_chip(body, Vector3(size.x - 0.08, 0.06, 0.04), Vector3(0.0, apron_y, depth * 0.5 - 0.04), color.darkened(0.18), 0.7)
+		_chip(body, Vector3(size.x - 0.08, 0.06, 0.04), Vector3(0.0, apron_y, -depth * 0.5 + 0.04), color.darkened(0.18), 0.7)
+	else:
+		_chip(body, Vector3(0.04, 0.06, size.z - 0.08), Vector3(depth * 0.5 - 0.04, apron_y, 0.0), color.darkened(0.18), 0.7)
+		_chip(body, Vector3(0.04, 0.06, size.z - 0.08), Vector3(-depth * 0.5 + 0.04, apron_y, 0.0), color.darkened(0.18), 0.7)
+	var seam := Vector3(0.012, 0.004, size.z * 0.72) if along_x else Vector3(size.x * 0.72, 0.004, 0.012)
+	_chip(body, seam, Vector3(0.0, top_y + top_h * 0.5 + 0.001, 0.0), color.darkened(0.22), 0.6)
+	var pairs := maxi(2, int(length / 1.4))
+	var leg_h := size.y - top_h
+	var leg_c := color.darkened(0.38)
+	for i in pairs:
+		var along := lerpf(-length * 0.5 + 0.14, length * 0.5 - 0.14, (float(i) + 0.5) / float(pairs))
+		for s in [-1.0, 1.0]:
+			var across := float(s) * (depth * 0.5 - 0.08)
+			var leg_at := Vector3(along, -top_h * 0.5, across) if along_x else Vector3(across, -top_h * 0.5, along)
+			_chip(body, Vector3(0.05, leg_h, 0.05), leg_at, leg_c, 0.7)
+			var shoe := Vector3(along, -size.y * 0.5 + 0.015, across) if along_x else Vector3(across, -size.y * 0.5 + 0.015, along)
+			_chip(body, Vector3(0.09, 0.028, 0.09), shoe, leg_c.darkened(0.1), 0.65)
+		var brace := Vector3(along, -size.y * 0.18, 0.0) if along_x else Vector3(0.0, -size.y * 0.18, along)
+		var bar := Vector3(0.03, 0.03, depth - 0.22) if along_x else Vector3(depth - 0.22, 0.03, 0.03)
+		_chip(body, bar, brace, leg_c, 0.75)
+	if depth > 0.9:
+		var surface := top_y + top_h * 0.5
+		_book_stack(body, Vector3(-0.42, surface, 0.12), Color(0.1, 0.16, 0.3))
+		_open_book(body, Vector3(0.38, surface + 0.006, -0.05), Color(0.32, 0.12, 0.1))
+
+
+func _board(pos: Vector3, size: Vector3) -> void:
+	var body := _furn_body(size, pos)
+	var metal := Surfaces.pbr("Metal009", Color(0.7, 0.72, 0.74), 2.5, 0.6, 0.7, 0.5)
+	_skin(body, size, Vector3.ZERO, metal)
+	var face := -size.z * 0.5 - 0.012
+	_skin(body, Vector3(size.x + 0.03, 0.05, 0.028), Vector3(0.0, size.y * 0.5, face), metal)
+	_skin(body, Vector3(size.x + 0.03, 0.05, 0.028), Vector3(0.0, -size.y * 0.5 + 0.08, face), metal)
+	_skin(body, Vector3(0.045, size.y, 0.028), Vector3(-size.x * 0.5, 0.0, face), metal)
+	_skin(body, Vector3(0.045, size.y, 0.028), Vector3(size.x * 0.5, 0.0, face), metal)
+	var opening := Vector3(size.x - 0.12, size.y - 0.2, 0.01)
+	_chip(body, opening, Vector3(0.0, 0.03, face - 0.012), Color(0.02, 0.05, 0.03), 0.8)
+	var board_z := face - 0.02
+	_skin(body, Vector3(opening.x - 0.02, opening.y - 0.02, 0.008), Vector3(0.0, 0.03, board_z), _chalk_surface())
+	var chalk := Color(0.9, 0.9, 0.84)
+	var rows: Array = [
+		[-1.15, 0.24, [0.36, 0.2, 0.44, 0.16, 0.3]],
+		[-1.12, 0.08, [0.24, 0.5, 0.18, 0.34]],
+		[-1.15, -0.08, [0.42, 0.16, 0.28, 0.22, 0.2]],
+		[-0.9, -0.24, [0.28, 0.18, 0.34]],
+	]
+	for row in rows:
+		var x: float = row[0]
+		var y: float = row[1]
+		var words: Array = row[2]
+		var word_i := 0
+		for w in words:
+			var width := float(w)
+			_chip(body, Vector3(width, 0.009, 0.003), Vector3(x + width * 0.5, y, board_z - 0.006), chalk, 0.9)
+			var stems := 2 + word_i % 3
+			for s in stems:
+				var sx := x + width * (0.18 + float(s) * 0.24)
+				var sh := 0.02 + float((s + word_i) % 3) * 0.008
+				_chip(body, Vector3(0.007, sh, 0.003), Vector3(sx, y + sh * 0.42, board_z - 0.007), chalk, 0.9)
+			x += width + 0.075
+			word_i += 1
+	var chart_x := 1.02
+	var chart_y := -0.2
+	_chip(body, Vector3(0.52, 0.006, 0.003), Vector3(chart_x, chart_y, board_z - 0.006), chalk, 0.96)
+	_chip(body, Vector3(0.006, 0.4, 0.003), Vector3(chart_x - 0.24, chart_y + 0.2, board_z - 0.006), chalk, 0.96)
+	var bars: Array[float] = [0.08, 0.15, 0.11, 0.24, 0.18]
+	for i in bars.size():
+		var h: float = bars[i]
+		_chip(body, Vector3(0.05, h, 0.003), Vector3(chart_x - 0.16 + float(i) * 0.09, chart_y + h * 0.5, board_z - 0.007), chalk, 0.96)
+	var tray_y := -size.y * 0.5 + 0.03
+	var tray_z := face - 0.04
+	_chip(body, Vector3(size.x - 0.2, 0.03, 0.07), Vector3(0.0, tray_y, tray_z), Color(0.24, 0.15, 0.08), 0.78)
+	_chip(body, Vector3(size.x - 0.22, 0.02, 0.012), Vector3(0.0, tray_y + 0.018, tray_z - 0.03), Color(0.18, 0.11, 0.06), 0.8)
+	_chip(body, Vector3(0.07, 0.016, 0.016), Vector3(-0.85, tray_y + 0.03, tray_z), chalk, 0.55)
+	_chip(body, Vector3(0.045, 0.014, 0.014), Vector3(-0.74, tray_y + 0.028, tray_z + 0.01), Color(0.92, 0.82, 0.35), 0.55)
+	_chip(body, Vector3(0.1, 0.026, 0.04), Vector3(0.9, tray_y + 0.032, tray_z), Color(0.1, 0.1, 0.1), 0.9)
+	_chip(body, Vector3(0.1, 0.008, 0.042), Vector3(0.9, tray_y + 0.048, tray_z), Color(0.45, 0.32, 0.18), 0.7)
+
+
+func _chalk_surface() -> ShaderMaterial:
+	if _chalk_mat == null:
+		_chalk_mat = ShaderMaterial.new()
+		_chalk_mat.shader = load("res://shaders/chalkboard.gdshader")
+	return _chalk_mat
+
+
+func _cabinet(pos: Vector3, size: Vector3, color: Color) -> void:
+	var body := _furn_body(size, pos)
+	var shell := Surfaces.pbr("PaintedMetal004", color.darkened(0.1), 0.8, 0.35)
+	var door := Surfaces.pbr("PaintedMetal004", color.lightened(0.05), 0.8, 0.35)
+	var slot := Color(0.04, 0.045, 0.05)
+	_skin(body, Vector3(size.x, size.y - 0.1, size.z), Vector3(0.0, 0.05, 0.0), shell)
+	_chip(body, Vector3(size.x - 0.06, 0.1, size.z - 0.06), Vector3(0.0, -size.y * 0.5 + 0.05, 0.0), slot, 0.8)
+	_skin(body, Vector3(size.x + 0.04, 0.04, size.z + 0.04), Vector3(0.0, size.y * 0.5 - 0.02, 0.0), shell)
+	var face := size.z * 0.5 + 0.0125
+	var leaf_w := size.x * 0.5 - 0.04
+	var leaf_h := size.y - 0.22
+	for sx in [-1.0, 1.0]:
+		var cx := float(sx) * (leaf_w * 0.5 + 0.015)
+		var at := Vector3(cx, 0.05, face)
+		_skin(body, Vector3(leaf_w, leaf_h, 0.025), at, door)
+		for row in 2:
+			var panel_y := leaf_h * (0.24 if row == 0 else -0.24)
+			_chip(body, Vector3(leaf_w - 0.16, 0.006, 0.006), at + Vector3(0.0, panel_y + leaf_h * 0.2, 0.014), slot, 0.6)
+			_chip(body, Vector3(leaf_w - 0.16, 0.006, 0.006), at + Vector3(0.0, panel_y - leaf_h * 0.2, 0.014), slot, 0.6)
+			_chip(body, Vector3(0.006, leaf_h * 0.4, 0.006), at + Vector3(-(leaf_w * 0.5 - 0.08), panel_y, 0.014), slot, 0.6)
+			_chip(body, Vector3(0.006, leaf_h * 0.4, 0.006), at + Vector3(leaf_w * 0.5 - 0.08, panel_y, 0.014), slot, 0.6)
+		for hinge_y in [-0.6, 0.6]:
+			_chip(body, Vector3(0.02, 0.09, 0.02), Vector3(float(sx) * (size.x * 0.5 - 0.005), 0.05 + hinge_y, face + 0.004), Color(0.5, 0.52, 0.54), 0.35, 0.8)
+		_chip(body, Vector3(0.022, 0.2, 0.022), Vector3(float(sx) * 0.07, 0.08, face + 0.03), Color(0.7, 0.71, 0.72), 0.25, 0.9)
+		_chip(body, Vector3(0.02, 0.02, 0.03), Vector3(float(sx) * 0.07, 0.17, face + 0.018), Color(0.7, 0.71, 0.72), 0.25, 0.9)
+		_chip(body, Vector3(0.02, 0.02, 0.03), Vector3(float(sx) * 0.07, -0.01, face + 0.018), Color(0.7, 0.71, 0.72), 0.25, 0.9)
+	_chip(body, Vector3(0.012, 0.03, 0.01), Vector3(0.0, 0.25, face + 0.016), Color(0.62, 0.52, 0.32), 0.3, 0.85)
+
+
+func _chair(pos: Vector3, size: Vector3, color: Color) -> void:
+	var body := _furn_body(size, pos)
+	var seat_y := -0.02
+	var wood := _wood(color.lightened(0.15), "Wood066")
+	_skin(body, Vector3(size.x * 0.86, 0.05, size.z * 0.86), Vector3(0.0, seat_y, 0.0), wood)
+	_chip(body, Vector3(size.x * 0.8, 0.025, size.z * 0.8), Vector3(0.0, seat_y + 0.035, 0.0), Color(0.22, 0.08, 0.07), 0.95)
+	for i in 3:
+		_skin(body, Vector3(size.x * 0.78, 0.07, 0.035), Vector3(0.0, size.y * (0.12 + float(i) * 0.12), -size.z * 0.38), wood)
+	for sx in [-1.0, 1.0]:
+		_skin(body, Vector3(0.045, size.y * 0.5, 0.045), Vector3(sx * size.x * 0.36, size.y * 0.22, -size.z * 0.38), wood)
+		for sz in [-1.0, 1.0]:
+			_skin(body, Vector3(0.045, size.y * 0.48, 0.045), Vector3(sx * size.x * 0.34, -size.y * 0.26, sz * size.z * 0.34), wood)
+		_skin(body, Vector3(0.025, 0.025, size.z * 0.66), Vector3(sx * size.x * 0.34, -size.y * 0.36, 0.0), wood)
+
+
+func _book(parent: Node3D, at: Vector3, tall: float, thick: float, deep: float, cover: Color, lean: float, kind: int) -> void:
+	var book := Node3D.new()
+	book.position = at
+	book.rotation.x = lean
+	parent.add_child(book)
+	var pages := Color(0.95, 0.92, 0.84)
+	var board_t := 0.007
+	var page_t := maxf(thick - board_t * 2.2, 0.01)
+	_chip(book, Vector3(deep * 0.9, tall * 0.94, page_t), Vector3(-deep * 0.035, 0.0, 0.0), pages, 0.94)
+	for line in 3:
+		var z := (float(line) - 1.0) * page_t * 0.22
+		_chip(book, Vector3(deep * 0.72, 0.002, 0.0025), Vector3(-deep * 0.05, tall * 0.47, z), pages.darkened(0.18), 0.9)
+	var finish := 0.32 if kind % 3 == 0 else 0.82
+	_chip(book, Vector3(deep, tall, board_t), Vector3(0.0, 0.0, thick * 0.5), cover, finish)
+	_chip(book, Vector3(deep, tall, board_t), Vector3(0.0, 0.0, -thick * 0.5), cover.darkened(0.08), finish)
+	var spine := cover.darkened(0.12)
+	var spine_x := deep * 0.5
+	_chip(book, Vector3(board_t, tall, thick + 0.002), Vector3(spine_x, 0.0, 0.0), spine, finish)
+	var cloth := cover.lightened(0.28)
+	if kind % 4 == 0:
+		cloth = Color(0.78, 0.64, 0.32)
+	elif kind % 4 == 1:
+		cloth = Color(0.9, 0.88, 0.8)
+	elif kind % 4 == 2:
+		cloth = cover.lightened(0.45)
+	_chip(book, Vector3(0.003, tall * 0.1, thick * 0.72), Vector3(spine_x + 0.005, tall * 0.16, 0.0), cloth, 0.4)
+	if kind % 3 != 2:
+		_chip(book, Vector3(0.003, tall * 0.045, thick * 0.5), Vector3(spine_x + 0.006, -tall * 0.08, 0.0), cloth.darkened(0.15), 0.45)
+	_chip(book, Vector3(0.003, 0.01, thick * 0.82), Vector3(spine_x + 0.005, tall * 0.44, 0.0), Color(0.62, 0.18, 0.16), 0.5)
+	_chip(book, Vector3(0.003, 0.008, thick * 0.82), Vector3(spine_x + 0.005, -tall * 0.44, 0.0), Color(0.62, 0.18, 0.16), 0.5)
+	_chip(book, Vector3(0.003, 0.016, 0.012), Vector3(spine_x + 0.006, -tall * 0.28, 0.0), cloth, 0.4)
+
+
+func _book_stack(parent: Node3D, at: Vector3, cover: Color) -> void:
+	var pages := Color(0.95, 0.92, 0.84)
+	var tones: Array[Color] = [cover, cover.darkened(0.2), Color(0.14, 0.18, 0.28)]
+	for i in 3:
+		var y := float(i) * 0.034
+		var slide := float(i - 1) * 0.012
+		var tone := tones[i]
+		_chip(parent, Vector3(0.3, 0.006, 0.21), at + Vector3(slide, y, 0.0), tone.darkened(0.12), 0.7)
+		_chip(parent, Vector3(0.27, 0.02, 0.17), at + Vector3(slide - 0.008, y + 0.014, 0.0), pages, 0.94)
+		for edge in 4:
+			var ez := -0.06 + float(edge) * 0.03
+			_chip(parent, Vector3(0.24, 0.002, 0.002), at + Vector3(slide - 0.008, y + 0.012 + float(edge) * 0.004, ez), pages.darkened(0.12), 0.9)
+		_chip(parent, Vector3(0.3, 0.007, 0.21), at + Vector3(slide, y + 0.026, 0.0), tone, 0.62)
+		_chip(parent, Vector3(0.004, 0.018, 0.15), at + Vector3(slide + 0.132, y + 0.014, 0.0), pages.darkened(0.04), 0.9)
+	_chip(parent, Vector3(0.012, 0.004, 0.09), at + Vector3(0.04, 0.1, 0.02), Color(0.7, 0.15, 0.14), 0.45)
+
+
+func _open_book(parent: Node3D, at: Vector3, cover: Color) -> void:
+	var pages := Color(0.96, 0.94, 0.88)
+	var ink := Color(0.22, 0.22, 0.26)
+	_chip(parent, Vector3(0.46, 0.008, 0.32), at, cover.darkened(0.15), 0.7)
+	_chip(parent, Vector3(0.2, 0.006, 0.28), at + Vector3(-0.12, 0.006, 0.0), pages, 0.92)
+	_chip(parent, Vector3(0.2, 0.006, 0.28), at + Vector3(0.12, 0.008, 0.0), pages, 0.92)
+	_chip(parent, Vector3(0.014, 0.012, 0.3), at + Vector3(0.0, 0.004, 0.0), cover.darkened(0.3), 0.8)
+	for side_v in [-1.0, 1.0]:
+		var side := float(side_v)
+		for line in 5:
+			var width := 0.13 if line % 4 != 3 else 0.08
+			_chip(parent, Vector3(width, 0.003, 0.004), at + Vector3(side * 0.12, 0.012, -0.08 + float(line) * 0.032), ink, 0.9)
+
+
+func _plinth(pos: Vector3, size: Vector3, color: Color) -> void:
+	var body := _furn_body(size, pos)
+	_skin(body, size, Vector3.ZERO, _wood(color, "Wood066"))
+	_chip(body, Vector3(size.x + 0.02, 0.05, size.z + 0.02), Vector3(0.0, size.y * 0.5 - 0.02, 0.0), color.lightened(0.1), 0.7)
+
+
+func _closed_lockers(pos: Vector3, size: Vector3, side: float) -> void:
+	var body := _furn_body(size, pos)
+	body.add_to_group("closed_lockers")
+	var shell := Surfaces.pbr("PaintedMetal004", Color(0.2, 0.24, 0.28), 0.8, 0.35)
+	var door := Surfaces.pbr("PaintedMetal004", Color(0.34, 0.4, 0.46), 0.8, 0.35)
+	var lip := Surfaces.pbr("PaintedMetal004", Color(0.28, 0.33, 0.38), 0.8, 0.35)
+	var slot := Color(0.04, 0.045, 0.05)
+	_skin(body, Vector3(size.x - 0.04, size.y, size.z), Vector3(side * 0.02, 0.0, 0.0), shell)
+	var face := -side * (size.x * 0.5 - 0.01)
+	var out := -side
+	_skin(body, Vector3(0.04, 0.06, size.z + 0.02), Vector3(face + out * 0.006, size.y * 0.5 - 0.03, 0.0), lip)
+	_chip(body, Vector3(0.03, 0.08, size.z), Vector3(face + out * 0.004, -size.y * 0.5 + 0.04, 0.0), slot, 0.7)
+	var count := 4
+	var gap := 0.045
+	var door_w := (size.z - gap * float(count + 1)) / float(count)
+	var door_h := size.y - 0.2
+	for i in count:
+		var z := -size.z * 0.5 + gap + door_w * 0.5 + float(i) * (door_w + gap)
+		var at := Vector3(face, 0.02, z)
+		_skin(body, Vector3(0.028, door_h, door_w), at, door)
+		for edge in [-1.0, 1.0]:
+			_skin(body, Vector3(0.034, door_h, 0.022), at + Vector3(0.0, 0.0, float(edge) * (door_w * 0.5 - 0.011)), lip)
+			_skin(body, Vector3(0.034, 0.022, door_w), at + Vector3(0.0, float(edge) * (door_h * 0.5 - 0.011), 0.0), lip)
+		for slit in 5:
+			var slit_y := door_h * 0.4 - float(slit) * 0.035
+			_chip(body, Vector3(0.01, 0.013, door_w * 0.62), at + Vector3(out * 0.016, slit_y, 0.0), slot, 0.7)
+		for slit in 3:
+			var slit_y := -door_h * 0.36 - float(slit) * 0.035
+			_chip(body, Vector3(0.01, 0.013, door_w * 0.62), at + Vector3(out * 0.016, slit_y, 0.0), slot, 0.7)
+		var latch := side * door_w * 0.3
+		_chip(body, Vector3(0.016, 0.12, 0.03), at + Vector3(out * 0.02, 0.02, latch), Color(0.68, 0.64, 0.52), 0.25, 0.75)
+		_chip(body, Vector3(0.012, 0.03, 0.03), at + Vector3(out * 0.02, 0.12, latch), Color(0.6, 0.52, 0.32), 0.3, 0.85)
+		_chip(body, Vector3(0.006, 0.05, 0.11), at + Vector3(out * 0.017, door_h * 0.24, 0.0), Color(0.62, 0.52, 0.32), 0.3, 0.8)
+		_chip(body, Vector3(0.004, 0.028, 0.08), at + Vector3(out * 0.021, door_h * 0.24, 0.0), Color(0.12, 0.1, 0.08), 0.7)
+		for hinge_y in [-0.6, 0.0, 0.6]:
+			_chip(body, Vector3(0.024, 0.08, 0.024), at + Vector3(out * 0.018, hinge_y, -side * (door_w * 0.5 - 0.004)), Color(0.5, 0.52, 0.54), 0.35, 0.8)
 
 
 func _add_lockers() -> void:
@@ -1784,13 +2170,11 @@ func _add_lockers() -> void:
 
 
 func _add_ducts() -> void:
-	var metal := StandardMaterial3D.new()
-	metal.albedo_color = Color(0.55, 0.58, 0.6)
-	metal.metallic = 0.8
-	metal.roughness = 0.32
+	var metal := Surfaces.pbr("Metal032", Color(0.85, 0.87, 0.9), 0.9, 0.45, 1.0, 0.8)
 	_duct_box(Vector3(0.9, 0.36, 62.0), Vector3(0.0, 2.95, -25.0), metal)
 	for c: float in BLOCKS:
 		_duct_box(Vector3(26.0, 0.36, 0.9), Vector3(0.0, 2.95, c), metal)
+	_duct_trim(metal)
 	var spine := PackedFloat32Array([6.0, 0.0, -12.0, -24.4, -36.0, -48.8, -56.0])
 	var spine_ids: Array[int] = []
 	for z in spine:
@@ -1851,6 +2235,72 @@ func _duct_box(size: Vector3, pos: Vector3, mat: Material) -> void:
 	shape.shape = col
 	body.add_child(shape)
 	add_child(body)
+
+
+func _duct_trim(metal: Material) -> void:
+	var flanges: Array[Transform3D] = []
+	var straps: Array[Transform3D] = []
+	var along_x := Basis(Vector3.UP, PI * 0.5)
+	var z := 6.0 - 1.2
+	while z > -56.0:
+		if absf(z - BLOCKS[0]) > 0.6 and absf(z - BLOCKS[1]) > 0.6 and absf(z - BLOCKS[2]) > 0.6:
+			flanges.append(Transform3D(Basis.IDENTITY, Vector3(0.0, 2.95, z)))
+			if int(roundf(z / 1.2)) % 2 == 0:
+				straps.append(Transform3D(Basis.IDENTITY, Vector3(0.0, 2.95, z + 0.6)))
+		z -= 1.2
+	for c: float in BLOCKS:
+		var x := -12.6
+		while x < 12.7:
+			if absf(x) > 0.6:
+				flanges.append(Transform3D(along_x, Vector3(x, 2.95, c)))
+				if int(roundf(x / 1.2)) % 2 == 0:
+					straps.append(Transform3D(along_x, Vector3(x + 0.6, 2.95, c)))
+			x += 1.2
+	var flange_mesh := BoxMesh.new()
+	flange_mesh.size = Vector3(0.95, 0.4, 0.035)
+	_multi(flange_mesh, metal, flanges)
+	var strap_mesh := BoxMesh.new()
+	strap_mesh.size = Vector3(0.96, 0.41, 0.025)
+	_multi(strap_mesh, Surfaces.flat(Color(0.2, 0.21, 0.22), 0.6, 0.6), straps)
+	var rods: Array[Transform3D] = []
+	for strap in straps:
+		var right := strap.basis.x
+		rods.append(Transform3D(Basis.IDENTITY, strap.origin + right * 0.47 + Vector3(0, 0.1, 0)))
+		rods.append(Transform3D(Basis.IDENTITY, strap.origin - right * 0.47 + Vector3(0, 0.1, 0)))
+	var rod_mesh := CylinderMesh.new()
+	rod_mesh.top_radius = 0.008
+	rod_mesh.bottom_radius = 0.008
+	rod_mesh.height = 0.3
+	rod_mesh.radial_segments = 6
+	_multi(rod_mesh, Surfaces.flat(Color(0.3, 0.31, 0.32), 0.5, 0.7), rods)
+	var joints: Array[Transform3D] = []
+	for c: float in BLOCKS:
+		joints.append(Transform3D(Basis.IDENTITY, Vector3(0.0, 2.95, c)))
+	var joint_mesh := BoxMesh.new()
+	joint_mesh.size = Vector3(1.08, 0.42, 1.08)
+	_multi(joint_mesh, metal, joints)
+	var caps: Array[Transform3D] = []
+	for c: float in BLOCKS:
+		for sx in [-1.0, 1.0]:
+			caps.append(Transform3D(along_x, Vector3(float(sx) * 12.99, 2.95, c)))
+	caps.append(Transform3D(Basis.IDENTITY, Vector3(0.0, 2.95, 6.0 - 0.01)))
+	caps.append(Transform3D(Basis.IDENTITY, Vector3(0.0, 2.95, -56.0 + 0.01)))
+	var cap_mesh := BoxMesh.new()
+	cap_mesh.size = Vector3(0.96, 0.42, 0.05)
+	_multi(cap_mesh, metal, caps)
+
+
+func _multi(mesh: Mesh, surface: Material, transforms: Array[Transform3D]) -> void:
+	var multi := MultiMesh.new()
+	multi.transform_format = MultiMesh.TRANSFORM_3D
+	multi.mesh = mesh
+	multi.instance_count = transforms.size()
+	for i in transforms.size():
+		multi.set_instance_transform(i, transforms[i])
+	var node := MultiMeshInstance3D.new()
+	node.multimesh = multi
+	node.material_override = surface
+	add_child(node)
 
 
 func _duct_point(point: Vector3) -> int:
@@ -1998,6 +2448,12 @@ func _lamp(pos: Vector3, color: Color, energy: float, radius: float) -> void:
 	mat.emission_energy_multiplier = 0.6
 	fixture.material_override = mat
 	add_child(fixture)
+	var rim := Surfaces.pbr("Metal009", Color(0.7, 0.72, 0.74), 2.0, 0.6, 0.6, 0.5)
+	for side in [-1.0, 1.0]:
+		_skin(fixture, Vector3(0.9, 0.05, 0.04), Vector3(0.0, 0.01, float(side) * 0.145), rim)
+		_skin(fixture, Vector3(0.04, 0.05, 0.25), Vector3(float(side) * 0.43, 0.01, 0.0), rim)
+	for i in 3:
+		_chip(fixture, Vector3(0.012, 0.012, 0.24), Vector3(-0.2 + float(i) * 0.2, -0.035, 0.0), Color(0.6, 0.62, 0.64), 0.4, 0.7)
 
 
 func _build_player() -> void:
@@ -2788,15 +3244,12 @@ func _solid(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> void:
 	_box(parent, size, pos, color, true)
 
 
-func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, solid := false) -> void:
+func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, solid := false, surface: Material = null) -> void:
 	var mesh := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = size
 	mesh.mesh = box
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = 0.92
-	mesh.material_override = mat
+	mesh.material_override = surface if surface else Surfaces.flat(color, 0.92)
 	var holder: Node3D = mesh
 	if solid:
 		var body := StaticBody3D.new()

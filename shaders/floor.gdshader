@@ -5,6 +5,8 @@ uniform vec3 tint : source_color = vec3(0.22, 0.23, 0.26);
 uniform float tile = 0.6;
 uniform float grout = 0.012;
 uniform float gloss = 0.35;
+uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform float grain = 0.18;
 
 varying vec3 w_pos;
 
@@ -43,4 +45,7 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = clamp(rough, 0.05, 1.0);
 	SPECULAR = 0.45;
+	vec3 nm = texture(grain_normal, p * 1.1).rgb * 2.0 - 1.0;
+	vec3 wn = normalize(vec3(nm.x * grain, 1.0, -nm.y * grain));
+	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 }

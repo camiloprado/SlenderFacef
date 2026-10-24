@@ -8,6 +8,7 @@ var _busy := false
 var _creak: AudioStreamPlayer3D
 var _glow: StandardMaterial3D
 var _glow_t := 0.0
+var _parts := Surfaces.Batch.new()
 
 
 func _ready() -> void:
@@ -150,9 +151,10 @@ func _swing(open: bool, duration := 0.38) -> void:
 
 
 func _build() -> void:
-	var steel := _mat(Color(0.16, 0.2, 0.24), 0.45)
+	_parts.cell = Vector2.ZERO
+	var steel := Surfaces.pbr("PaintedMetal004", Color(0.27, 0.35, 0.43), 0.8, 0.35, 1.0, 1.0, false)
 	var dark := _mat(Color(0.05, 0.06, 0.07), 0.8)
-	var inside := _mat(Color(0.07, 0.08, 0.09), 0.9)
+	var inside := Surfaces.pbr("PaintedMetal004", Color(0.12, 0.14, 0.16), 0.8, 0.35, 1.0, 1.0, false)
 	var shell := StaticBody3D.new()
 	add_child(shell)
 	_panel(shell, Vector3(0.96, 1.9, 0.06), Vector3(0.0, 1.0, -0.42), steel)
@@ -170,7 +172,10 @@ func _build() -> void:
 	_panel(_door, Vector3(0.38, 1.78, 0.04), Vector3(0.21, 1.0, 0.0), steel)
 	_panel(_door, Vector3(0.42, 1.78, 0.04), Vector3(0.69, 1.0, 0.0), steel)
 	_visual_on(_door, Vector3(0.03, 0.16, 0.04), Vector3(0.8, 1.05, 0.04), _mat(Color(0.55, 0.5, 0.4), 0.35))
+	_dress_door(steel, dark)
+	_dress_shell(dark)
 	_add_highlight()
+	_parts.flush()
 
 	_creak = AudioStreamPlayer3D.new()
 	_creak.stream = load("res://assets/audio/rangido/creak1.ogg")
@@ -178,6 +183,48 @@ func _build() -> void:
 	_creak.max_distance = 14.0
 	_creak.volume_db = -4.0
 	add_child(_creak)
+
+
+func _dress_door(steel: Material, dark: Material) -> void:
+	var face := 0.025
+	var lip := Surfaces.pbr("PaintedMetal004", Color(0.22, 0.29, 0.36), 0.8, 0.35, 1.0, 1.0, false)
+	_visual_on(_door, Vector3(0.84, 0.03, 0.012), Vector3(0.44, 1.875, face), lip)
+	_visual_on(_door, Vector3(0.84, 0.03, 0.012), Vector3(0.44, 0.125, face), lip)
+	_visual_on(_door, Vector3(0.03, 1.78, 0.012), Vector3(0.025, 1.0, face), lip)
+	_visual_on(_door, Vector3(0.03, 1.78, 0.012), Vector3(0.855, 1.0, face), lip)
+	_visual_on(_door, Vector3(0.012, 1.7, 0.01), Vector3(0.4, 1.0, face), dark)
+	for row in 5:
+		var y := 1.72 - float(row) * 0.045
+		for col in 2:
+			_visual_on(_door, Vector3(0.28, 0.014, 0.008), Vector3(0.21 + float(col) * 0.47, y, face + 0.002), dark)
+	for row in 3:
+		var y := 0.32 - float(row) * 0.045
+		for col in 2:
+			_visual_on(_door, Vector3(0.28, 0.014, 0.008), Vector3(0.21 + float(col) * 0.47, y, face + 0.002), dark)
+	var brass := _mat(Color(0.62, 0.52, 0.32), 0.3)
+	brass.metallic = 0.85
+	_visual_on(_door, Vector3(0.14, 0.06, 0.006), Vector3(0.21, 1.52, face + 0.004), brass)
+	_visual_on(_door, Vector3(0.11, 0.035, 0.002), Vector3(0.21, 1.52, face + 0.008), _mat(Color(0.12, 0.1, 0.08), 0.7))
+	var barrel := CylinderMesh.new()
+	barrel.top_radius = 0.018
+	barrel.bottom_radius = 0.018
+	barrel.height = 0.02
+	barrel.radial_segments = 12
+	_parts.add(_door, barrel, Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3(0.8, 1.2, face + 0.012)), brass)
+	_visual_on(_door, Vector3(0.004, 0.018, 0.004), Vector3(0.8, 1.2, face + 0.024), dark)
+
+
+func _dress_shell(dark: Material) -> void:
+	var hinge := _mat(Color(0.5, 0.52, 0.54), 0.35)
+	hinge.metallic = 0.8
+	var tube := CylinderMesh.new()
+	tube.top_radius = 0.012
+	tube.bottom_radius = 0.012
+	tube.height = 0.09
+	tube.radial_segments = 8
+	for y in [0.35, 1.0, 1.65]:
+		_parts.add(self, tube, Transform3D(Basis.IDENTITY, Vector3(-0.47, y, 0.445)), hinge)
+	_visual(Vector3(1.0, 0.05, 0.02), Vector3(0.0, 0.03, 0.44), dark)
 
 
 func _panel(parent: Node3D, size: Vector3, pos: Vector3, mat: Material) -> void:
@@ -195,13 +242,7 @@ func _visual(size: Vector3, pos: Vector3, mat: Material) -> void:
 
 
 func _visual_on(parent: Node3D, size: Vector3, pos: Vector3, mat: Material) -> void:
-	var mesh := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = size
-	mesh.mesh = box
-	mesh.position = pos
-	mesh.material_override = mat
-	parent.add_child(mesh)
+	_parts.box(parent, size, Transform3D(Basis.IDENTITY, pos), mat)
 
 
 func _add_highlight() -> void:
