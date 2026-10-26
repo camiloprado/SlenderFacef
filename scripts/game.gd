@@ -1773,10 +1773,13 @@ func _add_furniture() -> void:
 
 	for c: float in [BLOCKS[1], BLOCKS[2]]:
 		for sx in [-1.0, 1.0]:
-			for i in 3:
-				var dx: float = sx * (8.1 + float(i) * 2.2)
-				_desk(Vector3(dx, 0.38, c + 6.5), Vector3(1.2, 0.75, 0.7), oak)
-				_desk(Vector3(dx, 0.38, c + 9.2), Vector3(1.2, 0.75, 0.7), oak)
+			if c == BLOCKS[1] and sx > 0.0:
+				_card_game(Vector3(10.3, 0.0, c + 7.0), oak)
+			else:
+				for i in 3:
+					var dx: float = sx * (8.1 + float(i) * 2.2)
+					_desk(Vector3(dx, 0.38, c + 6.5), Vector3(1.2, 0.75, 0.7), oak)
+					_desk(Vector3(dx, 0.38, c + 9.2), Vector3(1.2, 0.75, 0.7), oak)
 			_board(Vector3(sx * 10.3, 1.6, c + 11.9), Vector3(3.0, 1.0, 0.1))
 
 	var a := BLOCKS[2]
@@ -2027,8 +2030,9 @@ func _cabinet(pos: Vector3, size: Vector3, color: Color) -> void:
 	_chip(body, Vector3(0.012, 0.03, 0.01), Vector3(0.0, 0.25, face + 0.016), Color(0.62, 0.52, 0.32), 0.3, 0.85)
 
 
-func _chair(pos: Vector3, size: Vector3, color: Color) -> void:
+func _chair(pos: Vector3, size: Vector3, color: Color, yaw := 0.0) -> void:
 	var body := _furn_body(size, pos)
+	body.rotation.y = yaw
 	var seat_y := -0.02
 	var wood := _wood(color.lightened(0.15), "Wood066")
 	_skin(body, Vector3(size.x * 0.86, 0.05, size.z * 0.86), Vector3(0.0, seat_y, 0.0), wood)
@@ -2104,6 +2108,112 @@ func _open_book(parent: Node3D, at: Vector3, cover: Color) -> void:
 		for line in 5:
 			var width := 0.13 if line % 4 != 3 else 0.08
 			_chip(parent, Vector3(width, 0.003, 0.004), at + Vector3(side * 0.12, 0.012, -0.08 + float(line) * 0.032), ink, 0.9)
+
+
+func _card_game(ctr: Vector3, oak: Color) -> void:
+	for ix in [-0.6, 0.6]:
+		for iz in [-0.35, 0.35]:
+			var nudge := Vector3(0.0, 0.0, 0.012 if ix > 0.0 else -0.006)
+			_desk(ctr + Vector3(ix, 0.38, iz) + nudge, Vector3(1.2, 0.75, 0.7), oak)
+	_desk(ctr + Vector3(4.7, 0.38, -3.0), Vector3(1.2, 0.75, 0.7), oak)
+	_desk(ctr + Vector3(4.7, 0.38, 2.6), Vector3(1.2, 0.75, 0.7), oak)
+
+	var chair := Color(0.2, 0.1, 0.07)
+	var size := Vector3(0.5, 0.9, 0.5)
+	_chair(ctr + Vector3(-0.1, 0.45, -1.1), size, chair, 0.08)
+	_chair(ctr + Vector3(0.15, 0.45, 1.1), size, chair, PI - 0.1)
+	_chair(ctr + Vector3(-1.6, 0.45, 0.05), size, chair, PI / 2.0)
+	_chair(ctr + Vector3(1.95, 0.45, -0.25), size, chair, -PI / 2.0 + 0.55)
+
+	var top := ctr + Vector3(0.0, 0.756, 0.0)
+	var hands: Array = [
+		[Vector3(-0.1, 0.0, -0.5), 0.0, ["", ""]],
+		[Vector3(0.15, 0.0, 0.5), PI, ["", ""]],
+		[Vector3(-0.95, 0.0, 0.05), PI / 2.0, ["", ""]],
+		[Vector3(0.92, 0.0, -0.12), -PI / 2.0, ["A♦", "Q♥", "5♠"]],
+	]
+	for hand: Array in hands:
+		var yaw: float = hand[1]
+		var cards: Array = hand[2]
+		var spin := Basis(Vector3.UP, yaw)
+		for i in cards.size():
+			var step := float(i) - float(cards.size() - 1) * 0.5
+			var at: Vector3 = top + hand[0] + spin * Vector3(-step * 0.034, float(i) * 0.0012, -absf(step) * 0.006)
+			_card(at, yaw - step * 0.26, cards[i])
+
+	_card(top + Vector3(0.0, 0.0, -0.13), 0.12, "K♠")
+	_card(top + Vector3(-0.14, 0.0015, 0.01), PI / 2.0 - 0.2, "3♥")
+	_card(top + Vector3(0.03, 0.003, 0.13), PI + 0.3, "Q♣")
+
+	var deck_at := top + Vector3(0.48, 0.0, 0.3)
+	var deck_spin := Basis(Vector3.UP, 0.35)
+	_props.box(self, Vector3(0.063, 0.016, 0.088), Transform3D(deck_spin, deck_at + Vector3(0.0, 0.008, 0.0)), Surfaces.flat(Color(0.9, 0.89, 0.85), 0.7))
+	_card(deck_at + Vector3(0.0, 0.0158, 0.0), 0.35, "")
+	_card(deck_at + Vector3(0.1, 0.0, -0.02), 0.2, "7♦")
+
+	_scoreboard(top + Vector3(-0.85, 0.0, 0.4), PI / 2.0 - 0.2)
+	var can := CylinderMesh.new()
+	can.top_radius = 0.032
+	can.bottom_radius = 0.032
+	can.height = 0.12
+	can.radial_segments = 14
+	can.rings = 1
+	_prop(self, can, Transform3D(Basis.IDENTITY, top + Vector3(1.02, 0.06, 0.5)), Surfaces.flat(Color(0.62, 0.06, 0.07), 0.3, 0.7))
+
+
+func _card(at: Vector3, yaw: float, face: String) -> void:
+	var spin := Basis(Vector3.UP, yaw)
+	_props.box(self, Vector3(0.063, 0.0006, 0.088), Transform3D(spin, at + Vector3(0.0, 0.0003, 0.0)), Surfaces.flat(Color(0.93, 0.92, 0.88), 0.6))
+	if face.is_empty():
+		_props.box(self, Vector3(0.055, 0.0003, 0.08), Transform3D(spin, at + Vector3(0.0, 0.0008, 0.0)), Surfaces.flat(Color(0.55, 0.08, 0.1), 0.55))
+		_props.box(self, Vector3(0.043, 0.0003, 0.068), Transform3D(spin, at + Vector3(0.0, 0.0011, 0.0)), Surfaces.flat(Color(0.42, 0.05, 0.08), 0.55))
+		return
+	var suit := face.right(1)
+	var ink := Color(0.68, 0.06, 0.06) if suit == "♥" or suit == "♦" else Color(0.06, 0.06, 0.07)
+	var lay := Basis(Vector3.UP, yaw + PI) * Basis(Vector3.RIGHT, -PI / 2.0)
+	_ink(face.left(-1) + "\n" + suit, 44, lay, at + spin * Vector3(0.022, 0.0009, 0.027), ink)
+	_ink(suit, 120, lay, at + spin * Vector3(0.0, 0.0009, -0.004), ink)
+
+
+func _ink(text: String, font_size: int, lay: Basis, at: Vector3, color: Color) -> Label3D:
+	var label := Label3D.new()
+	label.text = text
+	label.font_size = font_size
+	label.pixel_size = 0.00034
+	label.line_spacing = -font_size * 0.35
+	label.modulate = color
+	label.outline_size = 0
+	label.shaded = true
+	label.double_sided = false
+	label.alpha_cut = Label3D.ALPHA_CUT_DISCARD
+	label.transform = Transform3D(lay, at)
+	add_child(label)
+	return label
+
+
+func _scoreboard(at: Vector3, yaw: float) -> void:
+	var spin := Basis(Vector3.UP, yaw)
+	_props.box(self, Vector3(0.16, 0.001, 0.22), Transform3D(spin, at + Vector3(0.0, 0.0005, 0.0)), Surfaces.flat(Color(0.95, 0.94, 0.88), 0.92))
+	var label := Label3D.new()
+	label.text = "FODINHA\n         vidas  faz\nCAMILO  IIII    1\nBIA        III      0\nLEO        I         1\nDUDA     II       2\n\nrodada 3 - vira 7♦"
+	label.font_size = 40
+	label.pixel_size = 0.00028
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	label.modulate = Color(0.1, 0.13, 0.4)
+	label.outline_size = 0
+	label.shaded = true
+	label.double_sided = false
+	label.alpha_cut = Label3D.ALPHA_CUT_DISCARD
+	label.transform = Transform3D(spin.rotated(Vector3.UP, PI) * Basis(Vector3.RIGHT, -PI / 2.0), at + Vector3(0.0, 0.0012, 0.0))
+	add_child(label)
+	var pen := CylinderMesh.new()
+	pen.top_radius = 0.0045
+	pen.bottom_radius = 0.0045
+	pen.height = 0.14
+	pen.radial_segments = 8
+	pen.rings = 1
+	var lay := Basis(Vector3.UP, yaw + 0.5) * Basis(Vector3.RIGHT, PI / 2.0)
+	_prop(self, pen, Transform3D(lay, at + spin * Vector3(0.105, 0.0045, -0.02)), Surfaces.flat(Color(0.1, 0.2, 0.6), 0.4))
 
 
 func _plinth(pos: Vector3, size: Vector3, color: Color) -> void:
