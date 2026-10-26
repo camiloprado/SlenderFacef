@@ -590,6 +590,8 @@ func _hearing_range() -> float:
 		speed = 0.0
 	if speed > 4.8:
 		reach = lerpf(16.0, 22.0, aggression)
+	elif speed > 0.45 and bool(_player.get("crouching")):
+		reach = lerpf(2.0, 3.2, aggression)
 	elif speed > 0.45:
 		reach = lerpf(7.0, 10.5, aggression)
 	reach += float(_player.get("noise"))
@@ -600,7 +602,8 @@ func _can_see_player() -> bool:
 	if _player.hidden:
 		return false
 	var eye := global_position + Vector3(0.0, 1.7, 0.0)
-	var chest := _player.global_position + Vector3(0.0, 1.2, 0.0)
+	var chest_y := 0.7 if bool(_player.get("crouching")) else 1.2
+	var chest := _player.global_position + Vector3(0.0, chest_y, 0.0)
 	var to := chest - eye
 	var gap := to.length()
 	if gap < 0.2 or gap > 26.0:

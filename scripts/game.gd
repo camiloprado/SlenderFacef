@@ -2945,7 +2945,7 @@ func _build_menu(layer: CanvasLayer) -> void:
 	quit.name = "BtnQuit"
 	quit.pressed.connect(func() -> void: get_tree().quit())
 	column.add_child(quit)
-	_menu_title(column, "WASD para andar    Mouse para olhar\nShift para correr    F para a lanterna    E para pegar ou se esconder\nEsc solta o mouse    F3 abre o modo debug", 15, Color(0.35, 0.4, 0.5))
+	_menu_title(column, "WASD para andar    Mouse para olhar\nShift para correr    Ctrl para agachar    F para a lanterna    E para pegar ou se esconder\nEsc solta o mouse    F3 abre o modo debug", 15, Color(0.35, 0.4, 0.5))
 
 
 func _build_end_panel(layer: CanvasLayer) -> void:
@@ -3382,6 +3382,7 @@ func _ensure_actions() -> void:
 	_bind("move_left", KEY_A)
 	_bind("move_right", KEY_D)
 	_bind("sprint", KEY_SHIFT)
+	_bind("crouch", KEY_CTRL)
 	_bind("flashlight", KEY_F)
 	_bind("interact", KEY_E)
 	_bind("breath", KEY_SPACE)
