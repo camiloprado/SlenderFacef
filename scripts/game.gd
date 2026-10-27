@@ -255,12 +255,6 @@ func _process(delta: float) -> void:
 			_slender.active = true
 			_show_hint("Ele está andando pela faculdade.")
 	_update_breath(delta)
-	if debug_god and _slender.active and not _player.hidden and not _slender.venting:
-		var close := _player.global_position.distance_to(_slender.global_position)
-		if close < _slender.catch_distance + 0.4:
-			_slender.static_level = minf(_slender.static_level, 0.15)
-			_slender._static_hold = 0.0
-			_debug_shove_mascot()
 	if _hint_timer > 0.0:
 		_hint_timer -= delta
 	else:
@@ -488,7 +482,7 @@ func _on_caught(reason: String) -> void:
 		_slender._static_hold = 0.0
 		if _caught_scare > 0.0:
 			_abort_caught_scare()
-		_debug_shove_mascot()
+		_slender.velocity = Vector3.ZERO
 		_debug_note("Captura ignorada: " + reason)
 		_show_hint("Debug: captura ignorada.")
 		return
@@ -891,6 +885,13 @@ func _look_local(point: Vector3) -> void:
 	_ceremony_cam.look_at(_ceremony.to_global(point), Vector3.UP)
 
 
+func _hero_face() -> Vector3:
+	var head := _hero.get_node_or_null("Head") as Node3D
+	if head == null:
+		return _hero.position + Vector3(0.0, 1.18, 0.0)
+	return _ceremony.to_local(head.to_global(Vector3(0.0, -0.01, 0.05)))
+
+
 func _update_cutscene(delta: float) -> void:
 	if _scare > 0.0:
 		_scare -= delta
@@ -984,7 +985,7 @@ func _pose_camera(t: float) -> void:
 		_ceremony_cam.position = beside.lerp(front, u)
 		_ceremony_cam.fov = lerpf(42.0, 36.0, u)
 		var feet := _hero.position + Vector3(0.02, 0.045, 0.02)
-		_look_local(feet.lerp(_hero.position + Vector3(0, 1.48, -0.08), u))
+		_look_local(feet.lerp(_hero_face(), u))
 	elif t < CUT_WALK:
 		_ceremony_cam.position = Vector3(-0.95, 1.12, _hero.position.z + 1.2)
 		_ceremony_cam.fov = 48.0
@@ -995,10 +996,9 @@ func _pose_camera(t: float) -> void:
 		_look_local(Vector3(0.05, 1.18, -1.9))
 	elif t < CUT_PAN:
 		var pan := 0.0 if t < CUT_TURN else smoothstep(0.0, 1.0, (t - CUT_TURN) / (CUT_PAN - CUT_TURN))
-		_ceremony_cam.position = Vector3(0.35, 1.48, 0.35)
-		_ceremony_cam.fov = lerpf(40.0, 56.0, pan)
-		var face_look := _hero.position + Vector3(0, 1.52, 0)
-		_look_local(face_look.lerp(Vector3(0.4, 1.3, 4.9), pan))
+		_ceremony_cam.position = Vector3(0.3, 1.6, 0.05)
+		_ceremony_cam.fov = lerpf(38.0, 56.0, pan)
+		_look_local(_hero_face().lerp(Vector3(0.4, 1.3, 4.9), pan))
 	elif t < CUT_FOCUS:
 		var u := smoothstep(0.0, 1.0, (t - CUT_PAN) / (CUT_FOCUS - CUT_PAN))
 		_ceremony_cam.position = Vector3(0.15, 1.62, -0.2).lerp(Vector3(0.55, 1.58, 0.85), u)
@@ -3144,20 +3144,6 @@ func _build_debug_panel(layer: CanvasLayer) -> void:
 	var title := _label(column, Vector2.ZERO, 15)
 	title.text = "DEBUG    F3 esconde"
 	title.modulate = Color(0.55, 0.86, 0.9)
-	_debug_stats = _label(column, Vector2.ZERO, 13)
-	_debug_stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_debug_stats.custom_minimum_size = Vector2(290, 156)
-	_static_bar = ProgressBar.new()
-	_static_bar.min_value = 0.0
-	_static_bar.max_value = 1.0
-	_static_bar.show_percentage = false
-	_static_bar.custom_minimum_size = Vector2(0, 12)
-	_static_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(_static_bar)
-	_debug_log_label = _label(column, Vector2.ZERO, 12)
-	_debug_log_label.modulate = Color(0.78, 0.76, 0.68)
-	_debug_log_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_debug_log_label.custom_minimum_size = Vector2(290, 72)
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 6)
@@ -3169,6 +3155,26 @@ func _build_debug_panel(layer: CanvasLayer) -> void:
 	_debug_action(grid, "Lanterna", _debug_refill_light)
 	_god_button = _debug_action(grid, "Deus: desligado", _debug_toggle_god)
 	_debug_action(grid, "Ir até ele", _debug_face_mascot)
+	_debug_stats = _debug_text(column, 13, 12)
+	_static_bar = ProgressBar.new()
+	_static_bar.min_value = 0.0
+	_static_bar.max_value = 1.0
+	_static_bar.show_percentage = false
+	_static_bar.custom_minimum_size = Vector2(0, 12)
+	_static_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(_static_bar)
+	_debug_log_label = _debug_text(column, 12, 5)
+	_debug_log_label.modulate = Color(0.78, 0.76, 0.68)
+
+
+func _debug_text(parent: Control, font_size: int, lines: int) -> Label:
+	var label := _label(parent, Vector2.ZERO, font_size)
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.max_lines_visible = lines
+	label.custom_minimum_size = Vector2(290, float(lines) * (float(font_size) + 4.0))
+	return label
 
 
 func _set_debug(enabled: bool) -> void:
@@ -3202,6 +3208,7 @@ func _refresh_debug() -> void:
 	])
 	_static_bar.value = _slender.static_level
 	_debug_log_label.text = "\n".join(_debug_log)
+	_debug_panel.reset_size()
 
 
 func _debug_note(text: String) -> void:
@@ -3265,20 +3272,6 @@ func _debug_face_mascot() -> void:
 	_player.global_position = _slender.global_position + front * 3.2 + Vector3(0, 0.1, 0)
 	_player.velocity = Vector3.ZERO
 	_debug_note("Posicionado na frente do mascote")
-
-
-func _debug_shove_mascot() -> void:
-	var origin := _player.global_position
-	var reaches: Array[float] = [8.0, 5.0, 3.2]
-	var angles: Array[float] = [PI, PI * 0.5, -PI * 0.5, 0.0, PI * 0.25, -PI * 0.25]
-	for reach in reaches:
-		for ang in angles:
-			var pos := origin + Vector3(sin(ang), 0.0, cos(ang)) * reach
-			pos.y = 0.1
-			if _walkable(pos) and pos.distance_to(origin) > _slender.catch_distance + 0.8:
-				_slender.global_position = pos
-				_slender.velocity = Vector3.ZERO
-				return
 
 
 func _fmt_vec(v: Vector3) -> String:

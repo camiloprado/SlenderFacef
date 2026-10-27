@@ -132,6 +132,8 @@ func _physics_process(delta: float) -> void:
 		speed *= move_while_watched
 	if watch_behind and not _hunting() and _is_in_front() and (not staring or relentless):
 		speed = maxf(speed, lerpf(3.6, 5.4, aggression) * speed_scale)
+	if _god_mode() and dist < catch_distance + 0.6:
+		speed = 0.0
 	var dir := _chase_direction()
 	if speed <= 0.05 or dir == Vector3.ZERO:
 		velocity.x = move_toward(velocity.x, 0.0, delta * 24.0)
