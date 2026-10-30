@@ -156,6 +156,8 @@ var _audio: AudioStreamPlayer
 var _debug_log: PackedStringArray = []
 var _fade: ColorRect
 var _ceremony: Node3D
+var _previewing := false
+var _preview_held := false
 var _ceremony_cam: Camera3D
 var _face_point := Vector3.ZERO
 var _zoom_from := Vector3.ZERO
@@ -168,6 +170,7 @@ var _cut_hold := -1.0
 var _cut_done := false
 var _hero: Node3D
 var _crowd: Array[Node3D] = []
+var _deans: Array[Node3D] = []
 var _canudo: Node3D
 var _canudo_held := false
 var _hero_from := Vector3(0.0, 0.0, 1.2)
@@ -273,6 +276,8 @@ func _process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if state == State.READING and (event.is_action_pressed("ui_accept") or event.is_action_pressed("interact") or event.is_action_pressed("ui_cancel")):
 		_close_reading()
+	elif state == State.CUTSCENE and _previewing and event.is_action_pressed("ui_cancel"):
+		_leave_preview()
 	elif state == State.MENU and event.is_action_pressed("ui_accept"):
 		_start_game(false)
 	elif state == State.ENDED and event.is_action_pressed("restart"):
@@ -653,8 +658,8 @@ func _build_ceremony() -> void:
 	_ceremony.name = "Ceremony"
 	_ceremony.position = Vector3(0, 50, 0)
 	add_child(_ceremony)
-	_stage_box(Vector3(12.0, 0.12, 12.0), Vector3(0, 0.06, 0.9), Color(0.11, 0.07, 0.05))
-	_stage_box(Vector3(0.9, 0.025, 2.2), Vector3(0, 0.13, 1.85), Color(0.48, 0.07, 0.1))
+	_stage_box(Vector3(12.0, 0.12, 12.0), Vector3(0, -0.06, 0.9), Color(0.11, 0.07, 0.05))
+	_stage_box(Vector3(0.9, 0.008, 2.2), Vector3(0, 0.002, 1.85), Color(0.48, 0.07, 0.1))
 	_stage_box(Vector3(8.6, 0.48, 4.4), Vector3(0, 0.24, -2.35), Color(0.32, 0.18, 0.09))
 	_stage_box(Vector3(0.95, 0.02, 2.3), Vector3(0, 0.5, -1.2), Color(0.55, 0.08, 0.11))
 	_wood_step(Vector3(1.7, 0.16, 0.4), Vector3(0, 0.08, 0.78))
@@ -683,6 +688,7 @@ func _build_ceremony() -> void:
 	_ceremony.add_child(exit_sign)
 	_stage_box(Vector3(2.7, 0.07, 0.62), Vector3(0, 0.98, -1.88), Color(0.28, 0.15, 0.08))
 	_crowd.clear()
+	_deans.clear()
 	var columns: Array[float] = [-2.15, -1.25, 1.25, 2.15]
 	var seat := 0
 	for row in 3:
@@ -697,6 +703,7 @@ func _build_ceremony() -> void:
 	_hero = _make_graduate(Color(0.9, 0.72, 0.55), Color(0.16, 0.28, 0.62))
 	_hero.name = "Formando"
 	_hero.position = _hero_from
+	_hero.ground = _stage_ground
 	_ceremony.add_child(_hero)
 	_rector = _make_graduate(Color(0.72, 0.56, 0.42), Color(0.62, 0.48, 0.12), true)
 	_rector.name = "Reitor"
@@ -706,10 +713,10 @@ func _build_ceremony() -> void:
 		var member := _make_graduate(Color(0.55, 0.38, 0.28), Color(0.2, 0.24, 0.4))
 		member.position = Vector3(side, 0.48, -2.22)
 		_ceremony.add_child(member)
+		_deans.append(member)
 	_canudo = _make_canudo()
 	_ceremony.add_child(_canudo)
-	var rector_hand := _rector.get_node("ArmR/Hand") as Node3D
-	_canudo.reparent(rector_hand)
+	_canudo.reparent(_rector.hand(true))
 	_canudo.position = Vector3(0.02, -0.14, 0.02)
 	_canudo.rotation_degrees = Vector3(75, 10, 8)
 	_face_node = _slender.get_node("Mascot").duplicate() as Node3D
@@ -848,37 +855,14 @@ func _make_canudo() -> Node3D:
 	return root
 
 
-func _pose_arms(person: Node3D, lift: float, swing: float) -> void:
-	var left := person.get_node("ArmL") as Node3D
-	var right := person.get_node("ArmR") as Node3D
-	left.rotation.z = -lift
-	right.rotation.z = lift
-	left.rotation.x = swing
-	right.rotation.x = -swing
-
-
 func _give_canudo() -> void:
 	if _canudo_held or _hero == null or _canudo == null:
 		return
 	_canudo_held = true
-	var hand := _hero.get_node("ArmR/Hand") as Node3D
-	_canudo.reparent(hand)
+	_canudo.reparent(_hero.hand(true))
 	_canudo.position = Vector3(0.0, -0.2, 0.0)
 	_canudo.rotation = Vector3.ZERO
 	_canudo.scale = Vector3(1.35, 1.35, 1.35)
-
-
-func _reach(person: Node3D, left_x: float, right_x: float, left_z: float, right_z: float) -> void:
-	var left := person.get_node("ArmL") as Node3D
-	var right := person.get_node("ArmR") as Node3D
-	left.rotation = Vector3(left_x, 0.0, left_z)
-	right.rotation = Vector3(right_x, 0.0, right_z)
-
-
-func _sway_gown(person: Node3D, amount: float) -> void:
-	var skirt := person.get_node_or_null("Saia") as MeshInstance3D
-	if skirt:
-		skirt.rotation.z = amount
 
 
 func _look_local(point: Vector3) -> void:
@@ -886,10 +870,22 @@ func _look_local(point: Vector3) -> void:
 
 
 func _hero_face() -> Vector3:
-	var head := _hero.get_node_or_null("Head") as Node3D
-	if head == null:
-		return _hero.position + Vector3(0.0, 1.18, 0.0)
-	return _ceremony.to_local(head.to_global(Vector3(0.0, -0.01, 0.05)))
+	return _ceremony.to_local(_hero.head_node().to_global(Vector3(0.0, -0.01, 0.05)))
+
+
+func _stage_ground(point: Vector3) -> float:
+	if _ceremony == null:
+		return 0.0
+	var z := _ceremony.to_local(point).z
+	var height := 0.0
+	for edge: float in [0.98, 0.6, 0.22]:
+		if z < edge:
+			height += 0.16
+	return _ceremony.global_position.y + height
+
+
+func _head_of(person: Node3D) -> Vector3:
+	return person.head_node().global_position
 
 
 func _update_cutscene(delta: float) -> void:
@@ -919,55 +915,94 @@ func _apply_ceremony_pose(t: float) -> void:
 
 
 func _pose_people(t: float) -> void:
-	if _hero:
-		_sway_gown(_hero, 0.0)
-		if t < CUT_CLIMB:
-			var u := smoothstep(0.0, 1.0, t / CUT_CLIMB)
-			var z := lerpf(1.2, -0.05, u)
-			var step_y := 0.0
-			if z < 0.78:
-				step_y = 0.16
-			if z < 0.4:
-				step_y = 0.32
-			if z < 0.02:
-				step_y = 0.48
-			_hero.position = Vector3(0.0, step_y, z)
-			_hero.position.y += absf(sin(t * 9.0)) * 0.02
-			_hero.rotation = Vector3(lerpf(0.22, 0.0, u), PI, 0.0)
-			_pose_arms(_hero, 0.2, sin(t * 9.0) * 0.55)
-			_sway_gown(_hero, sin(t * 8.0) * 0.07)
-		elif t < CUT_WALK:
-			var u := smoothstep(0.0, 1.0, (t - CUT_CLIMB) / (CUT_WALK - CUT_CLIMB))
-			_hero.position = Vector3(0.0, 0.48, lerpf(-0.05, _hero_to.z, u))
-			_hero.position.y += absf(sin(t * 8.0)) * 0.03
-			_hero.rotation = Vector3(0.0, PI, 0.0)
-			_pose_arms(_hero, 0.22, sin(t * 8.0) * 0.4)
-			_sway_gown(_hero, sin(t * 8.0) * 0.06)
-		elif t < CUT_HAND:
-			var u := clampf((t - CUT_WALK) / 1.1, 0.0, 1.0)
-			_hero.position = _hero_to
-			_hero.rotation = Vector3(0.0, PI, 0.0)
-			_reach(_hero, lerpf(0.0, -1.15, u), lerpf(0.0, -1.05, u), 0.2, -0.15)
-			if _rector:
-				_reach(_rector, lerpf(0.0, -1.05, u), lerpf(0.0, -1.2, u), -0.1, 0.2)
-			if t >= 7.35:
-				_give_canudo()
+	if _hero == null or _rector == null:
+		return
+	var hero_head := _head_of(_hero)
+	var rector_head := _head_of(_rector)
+	var lens := _ceremony_cam.global_position
+	var shake_end := CUT_WALK + 2.1
+	_rector.look_at_point(hero_head, 0.7)
+	if t < CUT_CLIMB:
+		var u := smoothstep(0.0, 1.0, t / CUT_CLIMB)
+		var z := lerpf(1.2, -0.05, u)
+		var rise := 0.0
+		for edge: float in [0.98, 0.6, 0.22]:
+			rise += smoothstep(edge + 0.13, edge - 0.13, z)
+		_hero.position = Vector3(0.0, rise * 0.16, z)
+		_hero.rotation = Vector3(0.0, PI, 0.0)
+		_hero.set_step(0.0)
+		_hero.set_lean(Vector3(lerpf(0.2, 0.06, u), 0.0, 0.0))
+		_hero.act("idle")
+		_hero.look_at_point(rector_head, lerpf(0.2, 0.7, u))
+	elif t < CUT_WALK:
+		var u := smoothstep(0.0, 1.0, (t - CUT_CLIMB) / (CUT_WALK - CUT_CLIMB))
+		_hero.position = Vector3(0.0, 0.48, lerpf(-0.05, _hero_to.z, u))
+		_hero.rotation = Vector3(0.0, PI, 0.0)
+		_hero.set_step(0.0)
+		_hero.set_lean(Vector3(0.04, 0.0, 0.0))
+		_hero.act("idle")
+		_hero.look_at_point(rector_head, 0.9)
+	elif t < CUT_HAND:
+		var u := smoothstep(0.0, 1.0, clampf((t - CUT_WALK) / 1.0, 0.0, 1.0))
+		_hero.position = _hero_to
+		_hero.rotation = Vector3(0.0, PI, 0.0)
+		_hero.set_step(0.0)
+		if t < shake_end:
+			var shake := sin(t * 11.0) * 0.12 * u
+			_hero.set_arms(Vector3(lerpf(0.05, -0.75, u), 0.0, -0.12), Vector3(lerpf(0.05, -1.05, u) + shake, 0.0, lerpf(0.12, -0.12, u)), 0.25, lerpf(0.2, 0.55, u))
+			_rector.set_arms(Vector3(-0.6 * u, 0.0, 0.1), Vector3(lerpf(0.05, -1.1, u) - shake, 0.0, lerpf(0.12, -0.12, u)), 0.4, lerpf(0.2, 0.5, u))
+			_hero.set_lean(Vector3(0.12 * u, 0.0, 0.0))
+			_rector.set_lean(Vector3(0.1 * u, 0.0, 0.0))
+			_hero.look_at_point(rector_head, 1.0)
+			_rector.look_at_point(hero_head, 1.0)
 		else:
-			var spin := smoothstep(0.0, 1.0, (t - CUT_HAND) / (CUT_TURN - CUT_HAND))
-			var lift := smoothstep(0.15, 0.85, spin)
-			_hero.position = _hero_to + Vector3(0, sin(t * 8.0) * 0.05 * lift, 0)
-			_hero.rotation = Vector3(0.0, lerpf(PI, 0.0, spin), 0.0)
-			_pose_arms(_hero, lerpf(0.3, 2.2, lift), -0.25)
+			_hero.set_arms(Vector3(0.1, 0.0, -0.15), Vector3(-0.55, 0.0, 0.25), 0.3, 1.25)
+			_rector.set_arms(Vector3(-0.35, 0.0, 0.55), Vector3(0.08, 0.0, 0.14), 1.0, 0.25)
+			_hero.set_lean(Vector3.ZERO)
+			_rector.set_lean(Vector3(0.0, 0.0, -0.05))
+			_hero.look_at_point(lens, 1.0)
+			_rector.look_at_point(lens, 0.8)
+		if t >= 7.35:
 			_give_canudo()
-	if _rector and t >= CUT_HAND:
-		_pose_arms(_rector, 0.35, 0.0)
-	var cheer := 0.0 if t < CUT_HAND else smoothstep(0.0, 1.0, (t - CUT_HAND) / 0.8)
-	for grad in _crowd:
-		grad.rotation.y = PI + sin(t * 1.2 + grad.position.x) * 0.04
-		if cheer > 0.2:
-			_pose_arms(grad, 0.9, sin(t * 16.0 + grad.position.x * 3.0) * 0.35)
+	else:
+		var spin := smoothstep(0.0, 1.0, (t - CUT_HAND) / (CUT_TURN - CUT_HAND))
+		var lift := smoothstep(0.15, 0.85, spin)
+		_hero.position = _hero_to
+		_hero.rotation = Vector3(0.0, lerpf(PI, 0.0, spin), 0.0)
+		_hero.set_step((1.0 - lift) * smoothstep(0.0, 0.2, spin) * 0.6)
+		_hero.set_lean(Vector3(0.03 * lift, 0.0, 0.0))
+		var pump := sin(t * 7.0) * 0.18 * lift
+		_hero.set_arms(Vector3(-0.2, 0.0, lerpf(-0.3, -2.3, lift) - pump), Vector3(-0.2, 0.0, lerpf(0.3, 2.4, lift) + pump), 0.4, 0.3)
+		_hero.set_hop(maxf(sin(t * 7.0), 0.0) * 0.07 * lift)
+		_hero.look_at_point(lens, 0.6 + lift * 0.4)
+		_give_canudo()
+		_rector.act("polite" if t > CUT_HAND + 0.4 else "idle")
+		_rector.set_lean(Vector3.ZERO)
+		_rector.look_at_point(hero_head, 0.8)
+
+	for i in _deans.size():
+		var member := _deans[i]
+		member.look_at_point(hero_head, 0.75)
+		member.act("polite" if t > CUT_HAND + 0.25 + float(i) * 0.3 else "idle")
+
+	var cheers: Array[String] = ["cheer", "clap", "wave", "clap", "cheer"]
+	for i in _crowd.size():
+		var grad := _crowd[i]
+		grad.rotation.y = PI
+		var start := CUT_HAND + float(i % 5) * 0.14
+		if t >= start:
+			var action := cheers[i % cheers.size()]
+			grad.act(action)
+			grad.set_hop(maxf(sin(t * 7.5 + float(i)), 0.0) * 0.06 if action == "cheer" else 0.0)
+			grad.look_at_point(hero_head, 0.85)
+			grad.set_lean(Vector3(0.02, 0.0, 0.0))
 		else:
-			_pose_arms(grad, 0.16, 0.0)
+			grad.act("idle")
+			grad.set_hop(0.0)
+			grad.set_lean(Vector3.ZERO)
+			var chatting := i % 4 == 1 and t > 3.0 and t < 6.5
+			var neighbor := _crowd[i - 1 if i % 4 != 0 else i + 1]
+			grad.look_at_point(_head_of(neighbor) if chatting else hero_head, 0.9 if chatting else 0.7)
 	if _confetti:
 		_confetti.emitting = t >= CUT_HAND and t < CUT_DOLLY
 
@@ -1095,7 +1130,51 @@ func _apply_jumpscare() -> void:
 	_static_mat.set_shader_parameter("intensity", 0.0)
 
 
+func _preview_ceremony() -> void:
+	if state != State.MENU:
+		return
+	_previewing = true
+	_preview_held = _slender.held
+	_menu.visible = false
+	_start_ceremony()
+
+
+func _leave_preview() -> void:
+	_previewing = false
+	state = State.MENU
+	if _ceremony:
+		_ceremony.queue_free()
+	_ceremony = null
+	_ceremony_cam = null
+	_hero = null
+	_rector = null
+	_canudo = null
+	_face_node = null
+	_mouth = null
+	_stage_spot = null
+	_fill_light = null
+	_aisle_light = null
+	_sick_light = null
+	_confetti = null
+	_cam_attr = null
+	_crowd.clear()
+	_deans.clear()
+	_flashes.clear()
+	_scare = 0.0
+	_slender.held = _preview_held
+	_player.camera.current = true
+	_static_mat.set_shader_parameter("intensity", 0.0)
+	_fade.color = Color(0, 0, 0, 1)
+	_menu.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var fade_in := create_tween()
+	fade_in.tween_property(_fade, "color:a", 0.0, 0.45)
+
+
 func _finish_ceremony() -> void:
+	if _previewing:
+		_leave_preview()
+		return
 	_quiet_end = true
 	_static_mat.set_shader_parameter("intensity", 0.0)
 	if _fade:
@@ -2930,6 +3009,10 @@ func _build_menu(layer: CanvasLayer) -> void:
 		"Lucas Eduardo Alves Vizoto - 24691",
 	]:
 		_menu_title(credits, student, 22, Color(0.1, 0.12, 0.2))
+	var replay := _menu_button("Cutscene", Color(0.62, 0.48, 0.12))
+	replay.name = "BtnCutscene"
+	replay.pressed.connect(_preview_ceremony)
+	credits.add_child(replay)
 	var back := _menu_button("Voltar", Color(0.118, 0.102, 0.404))
 	back.pressed.connect(func() -> void:
 		credits.visible = false
